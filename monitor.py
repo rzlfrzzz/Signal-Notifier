@@ -19,6 +19,7 @@ import logging
 import config
 import database
 import mexc_client
+import rr_calc
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,9 @@ async def check_positions(bot, channel_id):
         all_tp_done = len(remaining_pending) == 0
 
         if all_tp_done:
-            database.close_signal(sig["id"], result="WIN", price=curr)
+            fresh_targets = database.get_all_targets_for_signal(sig["id"])
+            realized_rr = rr_calc.compute_realized_rr("WIN", fresh_targets)
+            database.close_signal(sig["id"], result="WIN", price=curr, realized_rr=realized_rr)
             highest = all_targets[-1] if all_targets else None
             rr_text = f"RR 1:{highest['rr']:g}" if highest else ""
             await bot.send_message(
@@ -102,9 +105,11 @@ async def check_positions(bot, channel_id):
                 ),
             )
         elif hit_sl:
-            already_hit = [t for t in all_targets if t["status"] == "HIT" or t["id"] in newly_hit_ids]
+            fresh_targets = database.get_all_targets_for_signal(sig["id"])
+            already_hit = [t for t in fresh_targets if t["status"] == "HIT"]
             result = "MIXED" if already_hit else "LOSS"
-            database.close_signal(sig["id"], result=result, price=curr)
+            realized_rr = rr_calc.compute_realized_rr(result, fresh_targets)
+            database.close_signal(sig["id"], result=result, price=curr, realized_rr=realized_rr)
             note = (
                 f"Sebagian TP sudah tercapai sebelumnya ({len(already_hit)}/{len(all_targets)} level)"
                 if result == "MIXED"
