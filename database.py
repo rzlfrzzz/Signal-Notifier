@@ -1,4 +1,3 @@
-"""Wrapper akses Supabase untuk tabel `signals` dan `signal_targets`."""
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -111,16 +110,78 @@ def mark_target_hit(target_id: int, hit_price: float):
     }).eq("id", target_id).execute()
 
 
-def close_signal(signal_id: int, *, result: str, price: float):
+def close_signal(signal_id: int, *, result: str, price: float, realized_rr: Optional[float] = None):
     """result: 'WIN' (semua TP tercapai) | 'LOSS' (SL kena, belum ada TP hit)
-    | 'MIXED' (SL kena, tapi sebagian TP sudah tercapai duluan)."""
+    | 'MIXED' (SL kena, tapi sebagian TP sudah tercapai duluan)
+    | 'MANUAL' (ditutup manual lewat /close).
+
+    realized_rr disimpan langsung supaya recap tidak perlu hitung ulang dari
+    target tiap kali (dan supaya close manual, yang RR-nya tidak berbasis
+    target, tetap konsisten)."""
     client = get_client()
-    client.table("signals").update({
+    update = {
         "status": "CLOSED",
         "result": result,
         "last_price": price,
         "closed_at": _now_iso(),
+    }
+    if realized_rr is not None:
+        update["realized_rr"] = realized_rr
+    client.table("signals").update(update).eq("id", signal_id).execute()
+
+
+def cancel_signal(signal_id: int):
+    """Batalkan signal yang masih PENDING (belum entry kesentuh)."""
+    client = get_client()
+    client.table("signals").update({
+        "status": "CANCELLED",
+        "closed_at": _now_iso(),
     }).eq("id", signal_id).execute()
+
+
+def get_pending_signals_by_symbol(symbol: str) -> list[dict]:
+    client = get_client()
+    res = (
+        client.table("signals")
+        .select("*")
+        .eq("symbol", symbol)
+        .eq("status", "PENDING")
+        .execute()
+    )
+    return res.data
+
+
+def get_active_signals_by_symbol(symbol: str) -> list[dict]:
+    client = get_client()
+    res = (
+        client.table("signals")
+        .select("*")
+        .eq("symbol", symbol)
+        .eq("status", "ACTIVE")
+        .execute()
+    )
+    return res.data
+
+
+def find_duplicate_open_signal(*, symbol: str, direction: str, entry: float,
+                                stoploss: float) -> Optional[dict]:
+    """Cek apakah sudah ada signal identik (symbol + direction + entry +
+    stoploss) yang statusnya masih PENDING atau ACTIVE. Dipakai supaya
+    signal yang ke-post dobel (mis. ke-forward ulang / typo repost) tidak
+    disimpan dua kali."""
+    client = get_client()
+    res = (
+        client.table("signals")
+        .select("*")
+        .eq("symbol", symbol)
+        .eq("direction", direction)
+        .eq("entry", entry)
+        .eq("stoploss", stoploss)
+        .in_("status", ["PENDING", "ACTIVE"])
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
 
 
 def update_last_price(signal_id: int, price: float):
