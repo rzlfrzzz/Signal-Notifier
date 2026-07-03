@@ -14,9 +14,13 @@ create table if not exists signals (
     stoploss        numeric not null,
     status          text not null default 'PENDING',
                     -- PENDING -> ACTIVE -> CLOSED
+                    -- PENDING -> CANCELLED (dibatalkan manual via /cancel,
+                    --  sebelum entry kesentuh)
                     -- (PENDING = entry belum kesentuh, ACTIVE = sudah entry,
-                    --  CLOSED = SL kena ATAU semua TP level tercapai)
-    result          text,                    -- 'WIN' | 'LOSS' | 'MIXED' | null selama belum closed
+                    --  CLOSED = SL/TP kena atau ditutup manual via /close,
+                    --  CANCELLED = dibatalkan sebelum entry kesentuh)
+    result          text,                    -- 'WIN' | 'LOSS' | 'MIXED' | 'MANUAL' | null selama belum closed
+    realized_rr     numeric,                 -- RR aktual saat closed (auto atau manual via /close)
     raw_message     text,
     last_price      numeric,
     created_at      timestamptz not null default now(),
@@ -59,6 +63,16 @@ alter table signals alter column rr drop not null;
 -- Perbarui constraint status: status lama 'TP_HIT'/'SL_HIT' diganti 'CLOSED'
 -- Data lama yang statusnya TP_HIT/SL_HIT tetap dianggap closed oleh query baru
 -- (lihat catatan di README), tidak perlu diubah manual kecuali kamu mau rapikan.
+
+-- Kolom realized_rr: menyimpan RR aktual saat signal closed (dihitung dan
+-- diisi langsung oleh bot, baik auto-close WIN/LOSS/MIXED maupun manual
+-- close lewat /close). Rekap membaca kolom ini, dengan fallback hitung
+-- ulang dari signal_targets untuk data lama yang belum terisi.
+alter table signals add column if not exists realized_rr numeric;
+
+-- Status 'CANCELLED' (dipakai oleh command /cancel) dan result 'MANUAL'
+-- (dipakai oleh command /close) tidak butuh migrasi kolom karena status
+-- dan result sudah bertipe text bebas (tanpa check constraint).
 
 create table if not exists signal_targets (
     id              bigserial primary key,
