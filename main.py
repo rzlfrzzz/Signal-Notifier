@@ -16,9 +16,11 @@ from telegram.ext import Application, ContextTypes, MessageHandler, CommandHandl
 
 import config
 import database
+import mexc_client
 import monitor
 import recap
-from signal_parser import parse_signal
+import rr_calc
+from signal_parser import parse_signal, parse_pair_arg
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -54,6 +56,24 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
             msg.message_id,
         )
         return  # bukan format signal, abaikan (pengumuman dll)
+
+    dup = database.find_duplicate_open_signal(
+        symbol=parsed.symbol,
+        direction=parsed.direction,
+        entry=parsed.entry,
+        stoploss=parsed.stoploss,
+    )
+    if dup is not None:
+        logger.info(
+            "Message_id=%s adalah duplikat signal id=%s (status=%s), diabaikan.",
+            msg.message_id, dup["id"], dup["status"],
+        )
+        await msg.reply_text(
+            f"⚠️ Signal ini sama persis dengan signal yang masih {dup['status']}\n"
+            f"{parsed.pair} ({parsed.direction}) | Entry {parsed.entry} | SL {parsed.stoploss}\n"
+            f"Diabaikan supaya tidak tercatat dobel."
+        )
+        return
 
     row = database.insert_signal(
         message_id=msg.message_id,
@@ -103,6 +123,83 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("\n".join(lines))
 
 
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cancel $PAIR -> batalkan posisi yang masih PENDING (belum entry kesentuh)."""
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Format: /cancel $PAIR (mis. /cancel $RE atau /cancel RE/USDT)"
+        )
+        return
+
+    parsed_pair = parse_pair_arg(" ".join(context.args))
+    if parsed_pair is None:
+        await update.effective_message.reply_text("Format pair tidak dikenali.")
+        return
+    display_pair, symbol = parsed_pair
+
+    pending = database.get_pending_signals_by_symbol(symbol)
+    if not pending:
+        active = database.get_active_signals_by_symbol(symbol)
+        if active:
+            await update.effective_message.reply_text(
+                f"{display_pair} sudah ACTIVE (entry sudah kesentuh), tidak bisa di-cancel. "
+                f"Pakai /close kalau mau ditutup manual sekarang."
+            )
+        else:
+            await update.effective_message.reply_text(f"Tidak ada posisi PENDING untuk {display_pair}.")
+        return
+
+    for s in pending:
+        database.cancel_signal(s["id"])
+
+    names = "\n".join(f"• {s['pair']} ({s['direction']}) entry {s['entry']}" for s in pending)
+    await update.effective_message.reply_text(f"🚫 Posisi PENDING dibatalkan:\n{names}")
+
+
+async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/close $PAIR -> tutup posisi ACTIVE di harga sekarang, RR dihitung dari harga tutup."""
+    if not context.args:
+        await update.effective_message.reply_text("Format: /close $PAIR (mis. /close $RE)")
+        return
+
+    parsed_pair = parse_pair_arg(" ".join(context.args))
+    if parsed_pair is None:
+        await update.effective_message.reply_text("Format pair tidak dikenali.")
+        return
+    display_pair, symbol = parsed_pair
+
+    active = database.get_active_signals_by_symbol(symbol)
+    if not active:
+        pending = database.get_pending_signals_by_symbol(symbol)
+        if pending:
+            await update.effective_message.reply_text(
+                f"{display_pair} masih PENDING (belum entry kesentuh). "
+                f"Pakai /cancel kalau mau dibatalkan."
+            )
+        else:
+            await update.effective_message.reply_text(f"Tidak ada posisi ACTIVE untuk {display_pair}.")
+        return
+
+    try:
+        curr = await mexc_client.get_price(symbol)
+    except Exception as e:
+        logger.warning("Gagal ambil harga MEXC untuk /close %s: %s", symbol, e)
+        await update.effective_message.reply_text(f"Gagal ambil harga MEXC untuk {display_pair}.")
+        return
+    if curr is None:
+        await update.effective_message.reply_text(f"Gagal ambil harga untuk {symbol}.")
+        return
+
+    lines = ["🔧 Posisi ditutup manual:"]
+    for s in active:
+        realized_rr = rr_calc.compute_manual_rr(s["direction"], s["entry"], s["stoploss"], curr)
+        database.close_signal(s["id"], result="MANUAL", price=curr, realized_rr=realized_rr)
+        lines.append(
+            f"• {s['pair']} ({s['direction']}) @ {curr:g} — {realized_rr:+.2f}R"
+        )
+    await update.effective_message.reply_text("\n".join(lines))
+
+
 async def cmd_rekap_harian(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await recap.send_daily_recap(context.bot)
 
@@ -127,6 +224,8 @@ def main():
 
     # Command manual (dipanggil dari chat pribadi ke bot, atau di grup/channel)
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("close", cmd_close))
     app.add_handler(CommandHandler("rekap_harian", cmd_rekap_harian))
     app.add_handler(CommandHandler("rekap_bulanan", cmd_rekap_bulanan))
 
