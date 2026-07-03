@@ -1,4 +1,3 @@
-"""Konfigurasi bot, dibaca dari environment variables (.env)."""
 import os
 from dotenv import load_dotenv
 
