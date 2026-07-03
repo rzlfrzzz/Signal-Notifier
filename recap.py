@@ -13,22 +13,19 @@ import pytz
 
 import config
 import database
+import rr_calc
 
 TZ = pytz.timezone(config.TIMEZONE)
 
 
 def _realized_rr(signal: dict, targets: list[dict]) -> float:
-    if not targets:
-        return -1.0 if signal["result"] == "LOSS" else 0.0
-
-    n = len(targets)
-    if signal["result"] == "WIN":
-        return sum(t["rr"] for t in targets) / n
-    # LOSS atau MIXED
-    total = 0.0
-    for t in targets:
-        total += t["rr"] if t["status"] == "HIT" else -1.0
-    return total / n
+    """Pakai realized_rr yang sudah tersimpan di kolom signals (diisi saat
+    close, baik otomatis maupun manual). Fallback hitung ulang dari target
+    untuk data lama yang belum punya kolom ini terisi."""
+    stored = signal.get("realized_rr")
+    if stored is not None:
+        return float(stored)
+    return rr_calc.compute_realized_rr(signal["result"], targets)
 
 
 def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
@@ -39,24 +36,29 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     wins = [s for s, _ in signals_with_targets if s["result"] == "WIN"]
     losses = [s for s, _ in signals_with_targets if s["result"] == "LOSS"]
     mixed = [s for s, _ in signals_with_targets if s["result"] == "MIXED"]
+    manual = [s for s, _ in signals_with_targets if s["result"] == "MANUAL"]
 
     win_rate = (len(wins) / total) * 100
     total_rr = sum(_realized_rr(s, t) for s, t in signals_with_targets)
 
     lines = [title, ""]
     lines.append(f"Total Signal : {total}")
-    lines.append(f"✅ Win   : {len(wins)}")
-    lines.append(f"🟡 Mixed : {len(mixed)} (partial TP sebelum SL)")
-    lines.append(f"🛑 Loss  : {len(losses)}")
+    lines.append(f"✅ Win    : {len(wins)}")
+    lines.append(f"🟡 Mixed  : {len(mixed)} (partial TP sebelum SL)")
+    lines.append(f"🛑 Loss   : {len(losses)}")
+    lines.append(f"🔧 Manual : {len(manual)} (ditutup manual via /close)")
     lines.append(f"Win Rate : {win_rate:.1f}%")
     lines.append(f"Total RR : {total_rr:+.2f}R")
     lines.append("")
     lines.append("Detail:")
     for s, t in signals_with_targets:
-        icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡"}.get(s["result"], "•")
+        icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡", "MANUAL": "🔧"}.get(s["result"], "•")
         rr = _realized_rr(s, t)
         hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
-        levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
+        if s["result"] == "MANUAL":
+            levels_text = "closed manual"
+        else:
+            levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
         lines.append(f"{icon} {s['pair']} ({s['direction']}) — {rr:+.2f}R ({levels_text})")
 
     return "\n".join(lines)
