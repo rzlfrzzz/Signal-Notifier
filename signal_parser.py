@@ -1,27 +1,3 @@
-"""Parser untuk format signal trading di channel Telegram.
-
-Mendukung dua variasi format contoh:
-
-Format A:
-    🔥 $RE/USDT (LONG) 🟢
-    Entry : 0.6325
-    Stoploss : 0.6000
-    Target : on chart
-
-Format B:
-    🟢 LONG SIGNAL ↗️
-    Pair: $NOM
-    Entry: 0.002236
-    Stop Loss: 0.001414
-
-Karena target biasanya "on chart" (bukan angka eksplisit), Take Profit
-dihitung otomatis sebagai BEBERAPA level mengikuti RR:
-    TP1 = RR 1:1, TP2 = RR 1:2, TP3 = RR 1:3, dst
-sampai config.DEFAULT_RR_MAX (default 3).
-
-Kalau signal menyebutkan RR eksplisit (mis. "RR 1:5"), angka itu dipakai
-sebagai RR level tertinggi (jadi TP1..TP4 + TP5 di RR 1:5).
-"""
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -85,6 +61,23 @@ def _build_targets(direction: str, entry: float, stoploss: float, rr_max: float)
             price = entry - rr * risk
         targets.append(TargetLevel(level=i, rr=rr, price=price))
     return targets
+
+
+_PAIR_ARG_RE = re.compile(r"^\$?([A-Za-z0-9]+)(?:\s*/\s*([A-Za-z]{2,6}))?$")
+
+
+def parse_pair_arg(raw: str) -> Optional[tuple[str, str]]:
+    """Parse argumen pair dari command manual (/cancel, /close), mis.
+    '$RE', 'RE', 'RE/USDT', '$RE/BUSD' -> (display_pair, mexc_symbol).
+    Return None kalau formatnya tidak dikenali."""
+    if not raw:
+        return None
+    match = _PAIR_ARG_RE.match(raw.strip())
+    if not match:
+        return None
+    ticker = match.group(1)
+    quote = match.group(2)
+    return _normalize_symbol(ticker, quote)
 
 
 def parse_signal(text: str) -> Optional[ParsedSignal]:
