@@ -16,6 +16,7 @@ from telegram.ext import Application, ContextTypes, MessageHandler, CommandHandl
 
 import config
 import database
+import formatting
 import mexc_client
 import monitor
 import recap
@@ -69,9 +70,8 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
             msg.message_id, dup["id"], dup["status"],
         )
         await msg.reply_text(
-            f"⚠️ Signal ini sama persis dengan signal yang masih {dup['status']}\n"
-            f"{parsed.pair} ({parsed.direction}) | Entry {parsed.entry} | SL {parsed.stoploss}\n"
-            f"Diabaikan supaya tidak tercatat dobel."
+            formatting.duplicate_signal(parsed, dup),
+            parse_mode="HTML",
         )
         return
 
@@ -92,12 +92,9 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         [(t.level, t.rr, t.price) for t in parsed.targets],
     )
 
-    tp_lines = "\n".join(f"TP{t.level} (RR 1:{t.rr:g}): {t.price:g}" for t in parsed.targets)
     await msg.reply_text(
-        f"📥 Signal tercatat & mulai dipantau\n"
-        f"{parsed.pair} ({parsed.direction})\n"
-        f"Entry: {parsed.entry} | SL: {parsed.stoploss}\n"
-        f"{tp_lines}"
+        formatting.new_signal(parsed),
+        parse_mode="HTML",
     )
 
 
@@ -105,22 +102,16 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/status -> list posisi yang lagi dipantau (PENDING/ACTIVE)."""
     open_signals = database.get_open_signals()
     if not open_signals:
-        await update.effective_message.reply_text("Tidak ada posisi yang sedang dipantau saat ini.")
+        await update.effective_message.reply_text(
+            formatting.status_empty(), parse_mode="HTML"
+        )
         return
 
     targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
-
-    lines = ["📋 Posisi yang sedang dipantau:\n"]
-    for s in open_signals:
-        targets = sorted(targets_by_signal.get(s["id"], []), key=lambda t: t["level"])
-        tp_summary = ", ".join(
-            f"TP{t['level']}{'✅' if t['status'] == 'HIT' else ''} {t['price']:g}" for t in targets
-        )
-        lines.append(
-            f"{s['status']} — {s['pair']} ({s['direction']}) | "
-            f"Entry {s['entry']} SL {s['stoploss']} | {tp_summary}"
-        )
-    await update.effective_message.reply_text("\n".join(lines))
+    await update.effective_message.reply_text(
+        formatting.status_list(open_signals, targets_by_signal),
+        parse_mode="HTML",
+    )
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -152,8 +143,10 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for s in pending:
         database.cancel_signal(s["id"])
 
-    names = "\n".join(f"• {s['pair']} ({s['direction']}) entry {s['entry']}" for s in pending)
-    await update.effective_message.reply_text(f"🚫 Posisi PENDING dibatalkan:\n{names}")
+    await update.effective_message.reply_text(
+        formatting.cancelled(display_pair, pending),
+        parse_mode="HTML",
+    )
 
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -190,14 +183,20 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Gagal ambil harga untuk {symbol}.")
         return
 
-    lines = ["🔧 Posisi ditutup manual:"]
+    closed = []
     for s in active:
         realized_rr = rr_calc.compute_manual_rr(s["direction"], s["entry"], s["stoploss"], curr)
         database.close_signal(s["id"], result="MANUAL", price=curr, realized_rr=realized_rr)
-        lines.append(
-            f"• {s['pair']} ({s['direction']}) @ {curr:g} — {realized_rr:+.2f}R"
-        )
-    await update.effective_message.reply_text("\n".join(lines))
+        closed.append({
+            "pair": s["pair"],
+            "direction": s["direction"],
+            "price": curr,
+            "rr": realized_rr,
+        })
+    await update.effective_message.reply_text(
+        formatting.closed_manual(closed),
+        parse_mode="HTML",
+    )
 
 
 async def cmd_rekap_harian(update: Update, context: ContextTypes.DEFAULT_TYPE):

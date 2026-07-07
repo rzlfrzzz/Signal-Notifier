@@ -20,9 +20,11 @@ import pytz
 
 import config
 import database
+import formatting
 import rr_calc
 
 TZ = pytz.timezone(config.TIMEZONE)
+DIVIDER = formatting.DIVIDER
 
 
 def _message_link(signal: dict) -> str | None:
@@ -79,10 +81,16 @@ def _realized_rr(signal: dict, targets: list[dict]) -> float:
     return rr_calc.compute_realized_rr(signal["result"], targets)
 
 
+def _bar(pct: float, size: int = 10) -> str:
+    filled = round((pct / 100) * size)
+    filled = max(0, min(size, filled))
+    return "█" * filled + "░" * (size - filled)
+
+
 def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
     total = len(signals_with_targets)
     if total == 0:
-        return f"{title}\n\nBelum ada signal yang closed pada periode ini."
+        return f"{title}\n{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"
 
     wins = [s for s, _ in signals_with_targets if s["result"] == "WIN"]
     losses = [s for s, _ in signals_with_targets if s["result"] == "LOSS"]
@@ -91,17 +99,20 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
 
     win_rate = (len(wins) / total) * 100
     total_rr = sum(_realized_rr(s, t) for s, t in signals_with_targets)
+    rr_icon = "🟩" if total_rr >= 0 else "🟥"
 
-    lines = [title, ""]
-    lines.append(f"Total Signal : {total}")
-    lines.append(f"✅ Win    : {len(wins)}")
-    lines.append(f"🟡 Mixed  : {len(mixed)} (partial TP sebelum SL)")
-    lines.append(f"🛑 Loss   : {len(losses)}")
-    lines.append(f"🔧 Manual : {len(manual)} (ditutup manual via /close)")
-    lines.append(f"Win Rate : {win_rate:.1f}%")
-    lines.append(f"Total RR : {total_rr:+.2f}R")
+    lines = [title, DIVIDER, ""]
+    lines.append(f"Total Signal   <b>{total}</b>")
+    lines.append(f"✅ Win     : <b>{len(wins)}</b>")
+    lines.append(f"🟡 Mixed   : <b>{len(mixed)}</b>  <i>(partial TP sebelum SL)</i>")
+    lines.append(f"🛑 Loss    : <b>{len(losses)}</b>")
+    lines.append(f"🔧 Manual  : <b>{len(manual)}</b>  <i>(ditutup via /close)</i>")
     lines.append("")
-    lines.append("Detail:")
+    lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
+    lines.append(f"Total RR   {rr_icon} <b>{total_rr:+.2f}R</b>")
+    lines.append("")
+    lines.append(f"{DIVIDER}")
+    lines.append("<b>Detail Signal</b>")
     for s, t in signals_with_targets:
         icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡", "MANUAL": "🔧"}.get(s["result"], "•")
         rr = _realized_rr(s, t)
@@ -110,7 +121,10 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
             levels_text = "closed manual"
         else:
             levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
-        lines.append(f"{icon} {_pair_html(s)} ({s['direction']}) — {rr:+.2f}R ({levels_text})")
+        lines.append(
+            f"{icon} {_pair_html(s)} ({s['direction']}) — "
+            f"<b>{rr:+.2f}R</b>  <i>{levels_text}</i>"
+        )
 
     return "\n".join(lines)
 
@@ -150,50 +164,49 @@ def _format_live_status(
     manual = [s for s, _ in closed_signals_with_targets if s["result"] == "MANUAL"]
 
     lines = [
-        f"🟢 Active : {len(running)}",
-        f"🟡 Waiting : {len(waiting)}",
-        f"🔴 Closed : {len(closed_signals_with_targets)}",
-        "",
-        "━━━━━━━━━━━━━━",
+        "<b>📌 Snapshot Posisi</b>",
+        f"🟢 Active : <b>{len(running)}</b>   "
+        f"🟡 Waiting : <b>{len(waiting)}</b>   "
+        f"🔴 Closed : <b>{len(closed_signals_with_targets)}</b>",
     ]
 
     if waiting:
         lines.append("")
-        lines.append("⏳ Waiting")
+        lines.append("⏳ <b>Waiting</b>")
         for s in waiting:
-            lines.append(f"• {_pair_html(s)}")
+            lines.append(f"   • {_pair_html(s)}")
 
     if running:
         lines.append("")
-        lines.append("🚀 Running")
+        lines.append("🚀 <b>Running</b>")
         for s in running:
             pct = _running_pct(s)
-            pct_text = f" ({pct:+.1f}%)" if pct is not None else ""
-            lines.append(f"• {_pair_html(s)}{pct_text}")
+            pct_text = f"  <b>{pct:+.1f}%</b>" if pct is not None else ""
+            lines.append(f"   • {_pair_html(s)}{pct_text}")
 
     if wins:
         lines.append("")
-        lines.append("💰 TP")
+        lines.append("💰 <b>TP</b>")
         for s in wins:
-            lines.append(f"• {_pair_html(s)} ✅")
+            lines.append(f"   • {_pair_html(s)} ✅")
 
     if mixed:
         lines.append("")
-        lines.append("🟡 Partial (SL setelah sebagian TP)")
+        lines.append("🟡 <b>Partial</b>  <i>(SL setelah sebagian TP)</i>")
         for s in mixed:
-            lines.append(f"• {_pair_html(s)}")
+            lines.append(f"   • {_pair_html(s)}")
 
     if losses:
         lines.append("")
-        lines.append("❌ SL")
+        lines.append("❌ <b>SL</b>")
         for s in losses:
-            lines.append(f"• {_pair_html(s)}")
+            lines.append(f"   • {_pair_html(s)}")
 
     if manual:
         lines.append("")
-        lines.append("🔧 Manual")
+        lines.append("🔧 <b>Manual</b>")
         for s in manual:
-            lines.append(f"• {_pair_html(s)}")
+            lines.append(f"   • {_pair_html(s)}")
 
     return "\n".join(lines)
 
@@ -218,11 +231,11 @@ async def send_daily_recap(bot, for_date: datetime | None = None):
     signals_with_targets = _with_targets(signals)
     open_signals = database.get_open_signals()
 
-    title = f"📊 REKAP HARIAN — {start_local.strftime('%d %B %Y')}"
+    title = f"📊 <b>REKAP HARIAN</b> — {start_local.strftime('%d %B %Y')}"
     status_section = _format_live_status(open_signals, signals_with_targets)
-    result_section = _format_recap("📈 Hasil Closed Hari Ini", signals_with_targets)
+    result_section = _format_recap("📈 <b>Hasil Closed Hari Ini</b>", signals_with_targets)
 
-    text = f"{title}\n\n{status_section}\n\n━━━━━━━━━━━━━━\n\n{result_section}"
+    text = f"{title}\n{DIVIDER}\n\n{status_section}\n\n{DIVIDER}\n\n{result_section}"
     await bot.send_message(
         chat_id=config.TELEGRAM_CHANNEL_ID,
         text=text,
@@ -245,7 +258,7 @@ async def send_monthly_recap(bot, for_date: datetime | None = None):
     end_utc = end_local.astimezone(pytz.utc).isoformat()
 
     signals = database.get_closed_signals_between(start_utc, end_utc)
-    title = f"📅 REKAP BULANAN — {start_local.strftime('%B %Y')}"
+    title = f"📅 <b>REKAP BULANAN</b> — {start_local.strftime('%B %Y')}"
     text = _format_recap(title, _with_targets(signals))
     await bot.send_message(
         chat_id=config.TELEGRAM_CHANNEL_ID,

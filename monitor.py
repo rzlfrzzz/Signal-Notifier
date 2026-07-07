@@ -18,6 +18,7 @@ import logging
 
 import config
 import database
+import formatting
 import mexc_client
 import rr_calc
 
@@ -59,11 +60,8 @@ async def check_positions(bot, channel_id):
                 database.mark_active(sig["id"], curr)
                 await bot.send_message(
                     chat_id=channel_id,
-                    text=(
-                        f"🎯 ENTRY HIT — {sig['pair']} ({sig['direction']})\n"
-                        f"Entry: {sig['entry']}\n"
-                        f"Harga sekarang: {curr}"
-                    ),
+                    text=formatting.entry_hit(sig, curr),
+                    parse_mode="HTML",
                 )
             else:
                 database.update_last_price(sig["id"], curr)
@@ -82,10 +80,8 @@ async def check_positions(bot, channel_id):
                 newly_hit_ids.add(t["id"])
                 await bot.send_message(
                     chat_id=channel_id,
-                    text=(
-                        f"✅ TP{t['level']} HIT — {sig['pair']} ({sig['direction']})\n"
-                        f"RR 1:{t['rr']:g} tercapai @ {curr}"
-                    ),
+                    text=formatting.tp_hit(sig, t, curr),
+                    parse_mode="HTML",
                 )
 
         remaining_pending = [t for t in pending_targets if t["id"] not in newly_hit_ids]
@@ -99,10 +95,8 @@ async def check_positions(bot, channel_id):
             rr_text = f"RR 1:{highest['rr']:g}" if highest else ""
             await bot.send_message(
                 chat_id=channel_id,
-                text=(
-                    f"🏁 POSISI CLOSED (WIN) — {sig['pair']} ({sig['direction']})\n"
-                    f"Semua target TP tercapai ({rr_text})"
-                ),
+                text=formatting.closed_win(sig, rr_text),
+                parse_mode="HTML",
             )
         elif hit_sl:
             fresh_targets = database.get_all_targets_for_signal(sig["id"])
@@ -117,11 +111,8 @@ async def check_positions(bot, channel_id):
             )
             await bot.send_message(
                 chat_id=channel_id,
-                text=(
-                    f"🛑 STOPLOSS HIT — {sig['pair']} ({sig['direction']})\n"
-                    f"Entry: {sig['entry']} -> SL: {sig['stoploss']}\n"
-                    f"{note}"
-                ),
+                text=formatting.closed_sl(sig, note, result),
+                parse_mode="HTML",
             )
         else:
             database.update_last_price(sig["id"], curr)
