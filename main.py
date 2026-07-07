@@ -108,10 +108,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
-    await update.effective_message.reply_text(
-        formatting.status_list(open_signals, targets_by_signal),
-        parse_mode="HTML",
-    )
+    for chunk in formatting.status_chunks(open_signals, targets_by_signal):
+        await update.effective_message.reply_text(chunk, parse_mode="HTML")
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
