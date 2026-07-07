@@ -131,10 +131,23 @@ def close_signal(signal_id: int, *, result: str, price: float, realized_rr: Opti
 
 
 def cancel_signal(signal_id: int):
-    """Batalkan signal yang masih PENDING (belum entry kesentuh)."""
+    """Batalkan signal yang masih PENDING (belum entry kesentuh) — manual
+    lewat command /cancel."""
     client = get_client()
     client.table("signals").update({
         "status": "CANCELLED",
+        "closed_at": _now_iso(),
+    }).eq("id", signal_id).execute()
+
+
+def invalidate_signal(signal_id: int, price: float):
+    """Batalkan signal PENDING secara otomatis karena harga sudah menyentuh
+    target terjauh (TP terakhir) duluan sebelum entry sempat kesentuh —
+    artinya entry sudah 'ketinggalan', signal dianggap tidak valid lagi."""
+    client = get_client()
+    client.table("signals").update({
+        "status": "INVALIDATED",
+        "last_price": price,
         "closed_at": _now_iso(),
     }).eq("id", signal_id).execute()
 

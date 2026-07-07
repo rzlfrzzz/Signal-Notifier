@@ -175,8 +175,30 @@ def status_chunks(open_signals: list[dict], targets_by_signal: dict) -> list[str
     return messages
 
 
-def cancel_missing_active() -> str:
-    return None  # placeholder kalau diperlukan nanti
+def invalidated(sig: dict, last_target: dict, curr: float) -> str:
+    return (
+        f"❌ <b>SIGNAL TIDAK VALID</b>\n"
+        f"{DIVIDER}\n"
+        f"{pair_title(sig['pair'], sig['direction'])}\n\n"
+        f"Entry <code>{fmt_num(sig['entry'])}</code> belum sempat kesentuh, "
+        f"tapi harga sudah tembus TP{last_target['level']} "
+        f"(<code>{fmt_num(last_target['price'])}</code>) di <code>{fmt_num(curr)}</code>.\n\n"
+        f"<i>Signal dibatalkan otomatis — harga sudah bergerak terlalu jauh "
+        f"dari area entry.</i>"
+    )
+
+
+def cancel_channel_notice(pending: list[dict]) -> str:
+    names = "\n".join(
+        f"• {pair_title(s['pair'], s['direction'])} — entry <code>{fmt_num(s['entry'])}</code>"
+        for s in pending
+    )
+    return (
+        f"🚫 <b>SIGNAL DIBATALKAN</b>\n"
+        f"{DIVIDER}\n"
+        f"{names}\n\n"
+        f"<i>Dibatalkan manual oleh admin.</i>"
+    )
 
 
 def cancelled(display_pair: str, pending: list[dict]) -> str:

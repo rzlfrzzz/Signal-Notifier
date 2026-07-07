@@ -146,6 +146,16 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
+    # Umumkan juga ke channel supaya member tahu signal ini dibatalkan —
+    # kecuali kalau /cancel memang dipanggil langsung dari channel itu
+    # sendiri (reply_text di atas sudah otomatis muncul di sana).
+    if str(update.effective_chat.id) != str(config.TELEGRAM_CHANNEL_ID):
+        await context.bot.send_message(
+            chat_id=config.TELEGRAM_CHANNEL_ID,
+            text=formatting.cancel_channel_notice(pending),
+            parse_mode="HTML",
+        )
+
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/close $PAIR -> tutup posisi ACTIVE di harga sekarang, RR dihitung dari harga tutup."""

@@ -16,9 +16,13 @@ create table if not exists signals (
                     -- PENDING -> ACTIVE -> CLOSED
                     -- PENDING -> CANCELLED (dibatalkan manual via /cancel,
                     --  sebelum entry kesentuh)
+                    -- PENDING -> INVALIDATED (dibatalkan otomatis oleh bot
+                    --  karena harga sudah menyentuh TP terjauh duluan
+                    --  sebelum entry sempat kesentuh)
                     -- (PENDING = entry belum kesentuh, ACTIVE = sudah entry,
                     --  CLOSED = SL/TP kena atau ditutup manual via /close,
-                    --  CANCELLED = dibatalkan sebelum entry kesentuh)
+                    --  CANCELLED = dibatalkan manual, INVALIDATED = harga
+                    --  sudah kelewat jauh sebelum entry kesentuh)
     result          text,                    -- 'WIN' | 'LOSS' | 'MIXED' | 'MANUAL' | null selama belum closed
     realized_rr     numeric,                 -- RR aktual saat closed (auto atau manual via /close)
     raw_message     text,

@@ -1,6 +1,10 @@
 """Loop periodik yang cek harga MEXC dan update status signal:
 
-PENDING -> ACTIVE   (harga menyentuh level entry)
+PENDING -> ACTIVE       (harga menyentuh level entry)
+PENDING -> INVALIDATED  (harga sudah menyentuh TP terjauh duluan, padahal
+                          entry belum pernah kesentuh sama sekali -> entry
+                          dianggap sudah "ketinggalan", signal dibatalkan
+                          otomatis + notifikasi ke channel)
 ACTIVE  -> tiap level TP (TP1, TP2, TP3, ...) dicek satu-satu; begitu
            tersentuh, level itu ditandai HIT dan bot kirim notifikasi partial.
 ACTIVE  -> CLOSED   terjadi kalau salah satu dari ini kejadian duluan:
@@ -44,8 +48,7 @@ async def check_positions(bot, channel_id):
         logger.warning("Gagal ambil harga MEXC: %s", e)
         return
 
-    active_signals = [s for s in open_signals if s["status"] == "ACTIVE"]
-    targets_by_signal = database.get_targets_for_signals([s["id"] for s in active_signals])
+    targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
 
     for sig in open_signals:
         symbol = sig["symbol"]
@@ -61,6 +64,18 @@ async def check_positions(bot, channel_id):
                 await bot.send_message(
                     chat_id=channel_id,
                     text=formatting.entry_hit(sig, curr),
+                    parse_mode="HTML",
+                )
+                continue
+
+            sig_targets = sorted(targets_by_signal.get(sig["id"], []), key=lambda t: t["level"])
+            last_target = sig_targets[-1] if sig_targets else None
+
+            if last_target is not None and _crossed(prev, curr, last_target["price"]):
+                database.invalidate_signal(sig["id"], curr)
+                await bot.send_message(
+                    chat_id=channel_id,
+                    text=formatting.invalidated(sig, last_target, curr),
                     parse_mode="HTML",
                 )
             else:
