@@ -142,19 +142,32 @@ def _running_pct(signal: dict) -> float | None:
     return change
 
 
+def _running_line(s: dict, targets: list[dict]) -> str:
+    """Satu baris posisi Running: pair, % floating dari entry, dan level TP
+    tertinggi yang sudah kesentuh (kalau ada)."""
+    pct = _running_pct(s)
+    pct_text = f"  <b>{pct:+.1f}%</b>" if pct is not None else ""
+    hit_levels = sorted(t["level"] for t in targets if t["status"] == "HIT")
+    tp_text = f"  ✅TP{hit_levels[-1]}" if hit_levels else ""
+    return f"   • {_pair_html(s)}{pct_text}{tp_text}"
+
+
 def _format_live_status(
     open_signals: list[dict],
     closed_signals_with_targets: list[tuple[dict, list[dict]]],
+    open_targets_by_signal: dict | None = None,
 ) -> str:
     """Section snapshot: hitung Active/Waiting/Closed lalu list per kategori.
 
     - Waiting  : posisi PENDING saat ini (live, tidak dibatasi periode)
     - Running  : posisi ACTIVE saat ini (live), dengan % floating dari entry
+                 dan TP tertinggi yang sudah kesentuh (kalau ada)
     - TP       : signal WIN yang closed pada periode rekap ini
     - Partial  : signal MIXED (SL kena setelah sebagian TP) pada periode ini
     - SL       : signal LOSS murni pada periode ini
     - Manual   : signal MANUAL (/close) pada periode ini
     """
+    open_targets_by_signal = open_targets_by_signal or {}
     waiting = [s for s in open_signals if s["status"] == "PENDING"]
     running = [s for s in open_signals if s["status"] == "ACTIVE"]
 
@@ -180,9 +193,7 @@ def _format_live_status(
         lines.append("")
         lines.append("🚀 <b>Running</b>")
         for s in running:
-            pct = _running_pct(s)
-            pct_text = f"  <b>{pct:+.1f}%</b>" if pct is not None else ""
-            lines.append(f"   • {_pair_html(s)}{pct_text}")
+            lines.append(_running_line(s, open_targets_by_signal.get(s["id"], [])))
 
     if wins:
         lines.append("")
@@ -219,6 +230,60 @@ def _with_targets(signals: list[dict]) -> list[tuple[dict, list[dict]]]:
     return result
 
 
+# Batas aman di bawah limit keras Telegram (4096 char per pesan).
+_STATUS_MAX_CHARS = 3500
+
+
+def status_snapshot_chunks(open_signals: list[dict], targets_by_signal: dict) -> list[str]:
+    """Snapshot ala rekap harian tapi cuma Waiting & Running — dipakai buat
+    command /status. Dipecah jadi beberapa pesan kalau kepanjangan."""
+    waiting = [s for s in open_signals if s["status"] == "PENDING"]
+    running = [s for s in open_signals if s["status"] == "ACTIVE"]
+
+    header = (
+        "<b>📌 Snapshot Posisi</b>\n"
+        f"🟢 Active : <b>{len(running)}</b>   🟡 Waiting : <b>{len(waiting)}</b>"
+    )
+
+    if not waiting and not running:
+        return [header + "\n\n<i>Tidak ada posisi yang sedang dipantau saat ini.</i>"]
+
+    blocks = []
+    if waiting:
+        blocks.append(
+            "⏳ <b>Waiting</b>\n" + "\n".join(f"   • {_pair_html(s)}" for s in waiting)
+        )
+    if running:
+        blocks.append(
+            "🚀 <b>Running</b>\n" + "\n".join(
+                _running_line(s, targets_by_signal.get(s["id"], [])) for s in running
+            )
+        )
+
+    pages: list[list[str]] = []
+    current: list[str] = []
+    current_len = len(header) + 2
+    for block in blocks:
+        block_len = len(block) + 2
+        if current and current_len + block_len > _STATUS_MAX_CHARS:
+            pages.append(current)
+            current = []
+            current_len = len(header) + 2
+        current.append(block)
+        current_len += block_len
+    if current:
+        pages.append(current)
+
+    total_pages = len(pages)
+    messages = []
+    for i, page_blocks in enumerate(pages, start=1):
+        h = header
+        if total_pages > 1:
+            h += f"  <i>(Halaman {i}/{total_pages})</i>"
+        messages.append(h + "\n\n" + "\n\n".join(page_blocks))
+    return messages
+
+
 async def send_daily_recap(bot, for_date: datetime | None = None):
     now_local = for_date or datetime.now(TZ)
     start_local = TZ.localize(datetime(now_local.year, now_local.month, now_local.day))
@@ -230,9 +295,10 @@ async def send_daily_recap(bot, for_date: datetime | None = None):
     signals = database.get_closed_signals_between(start_utc, end_utc)
     signals_with_targets = _with_targets(signals)
     open_signals = database.get_open_signals()
+    open_targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
 
     title = f"📊 <b>REKAP HARIAN</b> — {start_local.strftime('%d %B %Y')}"
-    status_section = _format_live_status(open_signals, signals_with_targets)
+    status_section = _format_live_status(open_signals, signals_with_targets, open_targets_by_signal)
     result_section = _format_recap("📈 <b>Hasil Closed Hari Ini</b>", signals_with_targets)
 
     text = f"{title}\n{DIVIDER}\n\n{status_section}\n\n{DIVIDER}\n\n{result_section}"

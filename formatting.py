@@ -38,12 +38,12 @@ def pair_title(pair: str, direction: str) -> str:
 # Signal baru terdeteksi (reply ke post channel)
 # ---------------------------------------------------------------------------
 
-def new_signal(parsed) -> str:
+def new_signal(parsed, conflicts: list[dict] | None = None) -> str:
     tp_lines = "\n".join(
         f"   TP{t.level} · RR 1:{fmt_num(t.rr)} → <code>{fmt_num(t.price)}</code>"
         for t in parsed.targets
     )
-    return (
+    text = (
         f"📥 <b>SIGNAL BARU TERCATAT</b>\n"
         f"{DIVIDER}\n"
         f"{pair_title(parsed.pair, parsed.direction)}\n\n"
@@ -53,6 +53,22 @@ def new_signal(parsed) -> str:
         f"{tp_lines}\n\n"
         f"<i>Status: menunggu harga entry tersentuh...</i>"
     )
+
+    if conflicts:
+        conflict_lines = "\n".join(
+            f"   • {direction_badge(c['direction'])} · Entry <code>{fmt_num(c['entry'])}</code> "
+            f"· SL <code>{fmt_num(c['stoploss'])}</code> · <b>{esc(c['status'])}</b>"
+            for c in conflicts
+        )
+        text += (
+            f"\n\n{DIVIDER}\n"
+            f"⚠️ <b>PERHATIAN — sudah ada signal lain yang masih berjalan di "
+            f"{esc(parsed.pair)}:</b>\n"
+            f"{conflict_lines}\n"
+            f"<i>Cek lagi supaya tidak bentrok / dobel posisi di pair yang sama.</i>"
+        )
+
+    return text
 
 
 def duplicate_signal(parsed, dup: dict) -> str:
@@ -114,65 +130,12 @@ def closed_sl(sig: dict, note: str, result: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Command manual: /status, /cancel, /close
+# Command manual: /cancel, /close
+# (/status sekarang pakai recap.status_snapshot_chunks, format snapshot
+# yang sama dengan section live di rekap harian)
 # ---------------------------------------------------------------------------
 
-def status_empty() -> str:
-    return "📋 <b>Tidak ada posisi yang sedang dipantau saat ini.</b>"
 
-
-# Batas aman di bawah limit keras Telegram (4096 char per pesan), supaya
-# masih ada ruang buat header halaman tanpa perlu hitung pas-pasan.
-_STATUS_MAX_CHARS = 3500
-
-
-def _status_block(s: dict, targets_by_signal: dict) -> str:
-    targets = sorted(targets_by_signal.get(s["id"], []), key=lambda t: t["level"])
-    status_icon = "🟢 ACTIVE " if s["status"] == "ACTIVE" else "🟡 PENDING"
-    tp_summary = " · ".join(
-        f"TP{t['level']}{' ✅' if t['status'] == 'HIT' else ''} {fmt_num(t['price'])}"
-        for t in targets
-    ) or "-"
-    return (
-        f"{status_icon}  {pair_title(s['pair'], s['direction'])}\n"
-        f"   Entry <code>{fmt_num(s['entry'])}</code> · "
-        f"SL <code>{fmt_num(s['stoploss'])}</code>\n"
-        f"   {tp_summary}"
-    )
-
-
-def status_chunks(open_signals: list[dict], targets_by_signal: dict) -> list[str]:
-    """Pecah daftar posisi jadi beberapa pesan kalau kepanjangan (limit
-    Telegram 4096 char/pesan). Tiap pesan dapat header halaman
-    "(Halaman X/Y)" hanya kalau memang lebih dari satu halaman."""
-    total = len(open_signals)
-    blocks = [_status_block(s, targets_by_signal) for s in open_signals]
-
-    pages: list[list[str]] = []
-    current: list[str] = []
-    current_len = 0
-    for block in blocks:
-        block_len = len(block) + 2  # +2 untuk "\n\n" pemisah antar blok
-        if current and current_len + block_len > _STATUS_MAX_CHARS:
-            pages.append(current)
-            current = []
-            current_len = 0
-        current.append(block)
-        current_len += block_len
-    if current:
-        pages.append(current)
-    if not pages:
-        pages = [[]]
-
-    total_pages = len(pages)
-    messages = []
-    for i, page_blocks in enumerate(pages, start=1):
-        header = f"📋 <b>POSISI DIPANTAU</b> ({total})"
-        if total_pages > 1:
-            header += f"  <i>(Halaman {i}/{total_pages})</i>"
-        messages.append(header + "\n" + DIVIDER + "\n\n" + "\n\n".join(page_blocks))
-
-    return messages
 
 
 def invalidated(sig: dict, last_target: dict, curr: float) -> str:

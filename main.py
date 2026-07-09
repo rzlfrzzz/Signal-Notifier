@@ -92,24 +92,35 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         [(t.level, t.rr, t.price) for t in parsed.targets],
     )
 
+    # Signal lain (selain yang baru saja disimpan) yang masih PENDING/ACTIVE
+    # di pair yang sama, meskipun entry/SL/direction beda -> bukan duplikat
+    # persis, tapi tetap perlu di-flag supaya kelihatan kalau ada 2 signal
+    # nimpa di pair yang sama (mis. kamu & temanmu posting bareng).
+    conflicts = [
+        s for s in database.get_open_signals_by_symbol(parsed.symbol)
+        if s["id"] != row["id"]
+    ]
+    if conflicts:
+        logger.info(
+            "Message_id=%s: ada %d signal lain yang masih terbuka di symbol %s.",
+            msg.message_id, len(conflicts), parsed.symbol,
+        )
+
     await msg.reply_text(
-        formatting.new_signal(parsed),
+        formatting.new_signal(parsed, conflicts),
         parse_mode="HTML",
     )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/status -> list posisi yang lagi dipantau (PENDING/ACTIVE)."""
+    """/status -> snapshot posisi yang lagi dipantau (PENDING/ACTIVE),
+    dengan tampilan yang sama seperti section snapshot di rekap harian."""
     open_signals = database.get_open_signals()
-    if not open_signals:
-        await update.effective_message.reply_text(
-            formatting.status_empty(), parse_mode="HTML"
-        )
-        return
-
     targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
-    for chunk in formatting.status_chunks(open_signals, targets_by_signal):
-        await update.effective_message.reply_text(chunk, parse_mode="HTML")
+    for chunk in recap.status_snapshot_chunks(open_signals, targets_by_signal):
+        await update.effective_message.reply_text(
+            chunk, parse_mode="HTML", disable_web_page_preview=True
+        )
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

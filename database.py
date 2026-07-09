@@ -176,6 +176,23 @@ def get_active_signals_by_symbol(symbol: str) -> list[dict]:
     return res.data
 
 
+def get_open_signals_by_symbol(symbol: str) -> list[dict]:
+    """Semua signal PENDING/ACTIVE untuk satu symbol, tanpa peduli
+    direction/entry/SL. Dipakai buat ngasih tau kalau ada signal lain yang
+    masih jalan di pair yang sama (mis. 2 orang posting pair sama dengan
+    titik entry/SL beda) — beda dari find_duplicate_open_signal yang cuma
+    nangkep duplikat PERSIS (symbol+direction+entry+SL sama semua)."""
+    client = get_client()
+    res = (
+        client.table("signals")
+        .select("*")
+        .eq("symbol", symbol)
+        .in_("status", ["PENDING", "ACTIVE"])
+        .execute()
+    )
+    return res.data
+
+
 def find_duplicate_open_signal(*, symbol: str, direction: str, entry: float,
                                 stoploss: float) -> Optional[dict]:
     """Cek apakah sudah ada signal identik (symbol + direction + entry +
