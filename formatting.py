@@ -185,3 +185,14 @@ def closed_manual(closed: list[dict]) -> str:
             f"@ <code>{fmt_num(s['price'])}</code> — <b>{s['rr']:+.2f}R</b>"
         )
     return "\n".join(lines)
+
+
+def close_channel_notice(closed: list[dict]) -> str:
+    lines = ["🔧 <b>SIGNAL DITUTUP</b>", DIVIDER]
+    for s in closed:
+        sign = "🟩" if s["rr"] >= 0 else "🟥"
+        lines.append(
+            f"{sign} {pair_title(s['pair'], s['direction'])} "
+            f"ditutup manual @ <code>{fmt_num(s['price'])}</code> — <b>{s['rr']:+.2f}R</b>"
+        )
+    return "\n".join(lines)

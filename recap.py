@@ -81,6 +81,22 @@ def _realized_rr(signal: dict, targets: list[dict]) -> float:
     return rr_calc.compute_realized_rr(signal["result"], targets)
 
 
+def _realized_pct(signal: dict, targets: list[dict]) -> float:
+    """Persentase gain/loss realized, dihitung dari harga (entry vs
+    target/SL/close price) — bukan dari RR, supaya bisa diakumulasi
+    apple-to-apple antar signal (lihat catatan di rr_calc.py)."""
+    direction = signal["direction"]
+    entry = signal["entry"]
+    if signal["result"] == "MANUAL":
+        close_price = signal.get("last_price")
+        if close_price is None:
+            return 0.0
+        return rr_calc.compute_manual_pct(direction, entry, close_price)
+    return rr_calc.compute_realized_pct(
+        signal["result"], direction, entry, signal["stoploss"], targets
+    )
+
+
 def _bar(pct: float, size: int = 10) -> str:
     filled = round((pct / 100) * size)
     filled = max(0, min(size, filled))
@@ -98,8 +114,8 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     manual = [s for s, _ in signals_with_targets if s["result"] == "MANUAL"]
 
     win_rate = (len(wins) / total) * 100
-    total_rr = sum(_realized_rr(s, t) for s, t in signals_with_targets)
-    rr_icon = "🟩" if total_rr >= 0 else "🟥"
+    total_pct = sum(_realized_pct(s, t) for s, t in signals_with_targets)
+    pct_icon = "🟩" if total_pct >= 0 else "🟥"
 
     lines = [title, DIVIDER, ""]
     lines.append(f"Total Signal   <b>{total}</b>")
@@ -109,13 +125,14 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     lines.append(f"🔧 Manual  : <b>{len(manual)}</b>  <i>(ditutup via /close)</i>")
     lines.append("")
     lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
-    lines.append(f"Total RR   {rr_icon} <b>{total_rr:+.2f}R</b>")
+    lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
     lines.append("")
     lines.append(f"{DIVIDER}")
     lines.append("<b>Detail Signal</b>")
     for s, t in signals_with_targets:
         icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡", "MANUAL": "🔧"}.get(s["result"], "•")
         rr = _realized_rr(s, t)
+        pct = _realized_pct(s, t)
         hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
         if s["result"] == "MANUAL":
             levels_text = "closed manual"
@@ -123,7 +140,7 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
             levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
         lines.append(
             f"{icon} {_pair_html(s)} ({s['direction']}) — "
-            f"<b>{rr:+.2f}R</b>  <i>{levels_text}</i>"
+            f"<b>{pct:+.2f}%</b>  <i>({rr:+.2f}R · {levels_text})</i>"
         )
 
     return "\n".join(lines)

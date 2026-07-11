@@ -217,6 +217,16 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
+    # Umumkan juga ke channel supaya member tahu pair ini sudah ditutup —
+    # kecuali kalau /close memang dipanggil langsung dari channel itu
+    # sendiri (reply_text di atas sudah otomatis muncul di sana).
+    if str(update.effective_chat.id) != str(config.TELEGRAM_CHANNEL_ID):
+        await context.bot.send_message(
+            chat_id=config.TELEGRAM_CHANNEL_ID,
+            text=formatting.close_channel_notice(closed),
+            parse_mode="HTML",
+        )
+
 
 async def cmd_rekap_harian(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await recap.send_daily_recap(context.bot)
