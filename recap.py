@@ -97,6 +97,14 @@ def _realized_pct(signal: dict, targets: list[dict]) -> float:
     )
 
 
+def _manual_is_win(signal: dict, targets: list[dict]) -> bool:
+    """Signal MANUAL (ditutup via /close) dianggap WIN kalau realized_pct-nya
+    >= 0 (profit/breakeven), dan LOSS kalau minus. Dipakai supaya Win Rate
+    tetap mencerminkan hasil sebenarnya dari close manual, bukan otomatis
+    dianggap bukan-win."""
+    return _realized_pct(signal, targets) >= 0
+
+
 def _bar(pct: float, size: int = 10) -> str:
     filled = round((pct / 100) * size)
     filled = max(0, min(size, filled))
@@ -113,7 +121,15 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     mixed = [s for s, _ in signals_with_targets if s["result"] == "MIXED"]
     manual = [s for s, _ in signals_with_targets if s["result"] == "MANUAL"]
 
-    win_rate = (len(wins) / total) * 100
+    # Manual close ikut dihitung sebagai win/loss di Win Rate berdasarkan
+    # hasil realized_pct-nya (profit -> win, minus -> loss), bukan otomatis
+    # dianggap "bukan win" hanya karena ditutup manual.
+    manual_wins = [s for s, t in signals_with_targets
+                   if s["result"] == "MANUAL" and _manual_is_win(s, t)]
+    manual_losses = [s for s, t in signals_with_targets
+                      if s["result"] == "MANUAL" and not _manual_is_win(s, t)]
+
+    win_rate = ((len(wins) + len(manual_wins)) / total) * 100
     total_pct = sum(_realized_pct(s, t) for s, t in signals_with_targets)
     pct_icon = "🟩" if total_pct >= 0 else "🟥"
 
@@ -122,7 +138,10 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     lines.append(f"✅ Win     : <b>{len(wins)}</b>")
     lines.append(f"🟡 Mixed   : <b>{len(mixed)}</b>  <i>(partial TP sebelum SL)</i>")
     lines.append(f"🛑 Loss    : <b>{len(losses)}</b>")
-    lines.append(f"🔧 Manual  : <b>{len(manual)}</b>  <i>(ditutup via /close)</i>")
+    lines.append(
+        f"🔧 Manual  : <b>{len(manual)}</b>  "
+        f"<i>(ditutup via /close — {len(manual_wins)} win, {len(manual_losses)} loss)</i>"
+    )
     lines.append("")
     lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
     lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
@@ -130,7 +149,10 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     lines.append(f"{DIVIDER}")
     lines.append("<b>Detail Signal</b>")
     for s, t in signals_with_targets:
-        icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡", "MANUAL": "🔧"}.get(s["result"], "•")
+        if s["result"] == "MANUAL":
+            icon = "🔧✅" if _manual_is_win(s, t) else "🔧🛑"
+        else:
+            icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡"}.get(s["result"], "•")
         rr = _realized_rr(s, t)
         pct = _realized_pct(s, t)
         hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
