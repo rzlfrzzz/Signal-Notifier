@@ -111,10 +111,41 @@ def _bar(pct: float, size: int = 10) -> str:
     return "█" * filled + "░" * (size - filled)
 
 
-def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
+def _recap_detail_line(s: dict, t: list[dict]) -> str:
+    """Satu baris detail untuk satu signal yang closed."""
+    if s["result"] == "MANUAL":
+        icon = "🔧✅" if _manual_is_win(s, t) else "🔧🛑"
+    else:
+        icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡"}.get(s["result"], "•")
+    rr = _realized_rr(s, t)
+    pct = _realized_pct(s, t)
+    hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
+    if s["result"] == "MANUAL":
+        levels_text = "closed manual"
+    else:
+        levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
+    return (
+        f"{icon} {_pair_html(s)} ({s['direction']}) — "
+        f"<b>{pct:+.2f}%</b>  <i>({rr:+.2f}R · {levels_text})</i>"
+    )
+
+
+# Berapa baris detail signal digabung jadi satu "block" pagination. Angka
+# kecil supaya kalau ada banyak sekali signal closed dalam sehari, tetap
+# bisa dipecah antar block alih-alih jadi satu block raksasa yang sendirian
+# sudah melebihi _STATUS_MAX_CHARS.
+_DETAIL_LINES_PER_BLOCK = 15
+
+
+def _format_recap_blocks(
+    title: str, signals_with_targets: list[tuple[dict, list[dict]]]
+) -> list[str]:
+    """Pecah rekap (statistik + detail per-signal) jadi beberapa block teks,
+    supaya bisa dipaginasi oleh `_paginate_blocks` tanpa melebihi limit
+    karakter pesan Telegram."""
     total = len(signals_with_targets)
     if total == 0:
-        return f"{title}\n{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"
+        return [f"{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"]
 
     wins = [s for s, _ in signals_with_targets if s["result"] == "WIN"]
     losses = [s for s, _ in signals_with_targets if s["result"] == "LOSS"]
@@ -133,39 +164,28 @@ def _format_recap(title: str, signals_with_targets: list[tuple[dict, list[dict]]
     total_pct = sum(_realized_pct(s, t) for s, t in signals_with_targets)
     pct_icon = "🟩" if total_pct >= 0 else "🟥"
 
-    lines = [title, DIVIDER, ""]
-    lines.append(f"Total Signal   <b>{total}</b>")
-    lines.append(f"✅ Win     : <b>{len(wins)}</b>")
-    lines.append(f"🟡 Mixed   : <b>{len(mixed)}</b>  <i>(partial TP sebelum SL)</i>")
-    lines.append(f"🛑 Loss    : <b>{len(losses)}</b>")
-    lines.append(
+    stats_lines = [title, DIVIDER, ""]
+    stats_lines.append(f"Total Signal   <b>{total}</b>")
+    stats_lines.append(f"✅ Win     : <b>{len(wins)}</b>")
+    stats_lines.append(f"🟡 Mixed   : <b>{len(mixed)}</b>  <i>(partial TP sebelum SL)</i>")
+    stats_lines.append(f"🛑 Loss    : <b>{len(losses)}</b>")
+    stats_lines.append(
         f"🔧 Manual  : <b>{len(manual)}</b>  "
         f"<i>(ditutup via /close — {len(manual_wins)} win, {len(manual_losses)} loss)</i>"
     )
-    lines.append("")
-    lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
-    lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
-    lines.append("")
-    lines.append(f"{DIVIDER}")
-    lines.append("<b>Detail Signal</b>")
-    for s, t in signals_with_targets:
-        if s["result"] == "MANUAL":
-            icon = "🔧✅" if _manual_is_win(s, t) else "🔧🛑"
-        else:
-            icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡"}.get(s["result"], "•")
-        rr = _realized_rr(s, t)
-        pct = _realized_pct(s, t)
-        hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
-        if s["result"] == "MANUAL":
-            levels_text = "closed manual"
-        else:
-            levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
-        lines.append(
-            f"{icon} {_pair_html(s)} ({s['direction']}) — "
-            f"<b>{pct:+.2f}%</b>  <i>({rr:+.2f}R · {levels_text})</i>"
-        )
+    stats_lines.append("")
+    stats_lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
+    stats_lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
 
-    return "\n".join(lines)
+    blocks = ["\n".join(stats_lines)]
+
+    detail_lines = [_recap_detail_line(s, t) for s, t in signals_with_targets]
+    for i in range(0, len(detail_lines), _DETAIL_LINES_PER_BLOCK):
+        chunk_lines = detail_lines[i:i + _DETAIL_LINES_PER_BLOCK]
+        header = f"{DIVIDER}\n<b>Detail Signal</b>" if i == 0 else "<b>Detail Signal (lanjutan)</b>"
+        blocks.append(header + "\n" + "\n".join(chunk_lines))
+
+    return blocks
 
 
 def _running_pct(signal: dict) -> float | None:
@@ -191,12 +211,13 @@ def _running_line(s: dict, targets: list[dict]) -> str:
     return f"   • {_pair_html(s)}{pct_text}{tp_text}"
 
 
-def _format_live_status(
+def _format_live_status_blocks(
     open_signals: list[dict],
     closed_signals_with_targets: list[tuple[dict, list[dict]]],
     open_targets_by_signal: dict | None = None,
-) -> str:
-    """Section snapshot: hitung Active/Waiting/Closed lalu list per kategori.
+) -> list[str]:
+    """Section snapshot: hitung Active/Waiting/Closed lalu list per kategori,
+    dikembalikan sebagai list of blocks supaya bisa dipaginasi.
 
     - Waiting  : posisi PENDING saat ini (live, tidak dibatasi periode)
     - Running  : posisi ACTIVE saat ini (live), dengan % floating dari entry
@@ -215,50 +236,45 @@ def _format_live_status(
     losses = [s for s, _ in closed_signals_with_targets if s["result"] == "LOSS"]
     manual = [s for s, _ in closed_signals_with_targets if s["result"] == "MANUAL"]
 
-    lines = [
-        "<b>📌 Snapshot Posisi</b>",
-        f"🟢 Active : <b>{len(running)}</b>   "
-        f"🟡 Waiting : <b>{len(waiting)}</b>   "
-        f"🔴 Closed : <b>{len(closed_signals_with_targets)}</b>",
-    ]
+    blocks = ["<b>📌 Snapshot Posisi</b>\n"
+              f"🟢 Active : <b>{len(running)}</b>   "
+              f"🟡 Waiting : <b>{len(waiting)}</b>   "
+              f"🔴 Closed : <b>{len(closed_signals_with_targets)}</b>"]
 
     if waiting:
-        lines.append("")
-        lines.append("⏳ <b>Waiting</b>")
-        for s in waiting:
-            lines.append(f"   • {_pair_html(s)}")
+        blocks.append(
+            "⏳ <b>Waiting</b>\n" + "\n".join(f"   • {_pair_html(s)}" for s in waiting)
+        )
 
     if running:
-        lines.append("")
-        lines.append("🚀 <b>Running</b>")
-        for s in running:
-            lines.append(_running_line(s, open_targets_by_signal.get(s["id"], [])))
+        blocks.append(
+            "🚀 <b>Running</b>\n" + "\n".join(
+                _running_line(s, open_targets_by_signal.get(s["id"], [])) for s in running
+            )
+        )
 
     if wins:
-        lines.append("")
-        lines.append("💰 <b>TP</b>")
-        for s in wins:
-            lines.append(f"   • {_pair_html(s)} ✅")
+        blocks.append(
+            "💰 <b>TP</b>\n" + "\n".join(f"   • {_pair_html(s)} ✅" for s in wins)
+        )
 
     if mixed:
-        lines.append("")
-        lines.append("🟡 <b>Partial</b>  <i>(SL setelah sebagian TP)</i>")
-        for s in mixed:
-            lines.append(f"   • {_pair_html(s)}")
+        blocks.append(
+            "🟡 <b>Partial</b>  <i>(SL setelah sebagian TP)</i>\n"
+            + "\n".join(f"   • {_pair_html(s)}" for s in mixed)
+        )
 
     if losses:
-        lines.append("")
-        lines.append("❌ <b>SL</b>")
-        for s in losses:
-            lines.append(f"   • {_pair_html(s)}")
+        blocks.append(
+            "❌ <b>SL</b>\n" + "\n".join(f"   • {_pair_html(s)}" for s in losses)
+        )
 
     if manual:
-        lines.append("")
-        lines.append("🔧 <b>Manual</b>")
-        for s in manual:
-            lines.append(f"   • {_pair_html(s)}")
+        blocks.append(
+            "🔧 <b>Manual</b>\n" + "\n".join(f"   • {_pair_html(s)}" for s in manual)
+        )
 
-    return "\n".join(lines)
+    return blocks
 
 
 def _with_targets(signals: list[dict]) -> list[tuple[dict, list[dict]]]:
@@ -271,6 +287,49 @@ def _with_targets(signals: list[dict]) -> list[tuple[dict, list[dict]]]:
 
 # Batas aman di bawah limit keras Telegram (4096 char per pesan).
 _STATUS_MAX_CHARS = 3500
+
+
+def _paginate_blocks(
+    header: str, blocks: list[str], max_chars: int = _STATUS_MAX_CHARS
+) -> list[str]:
+    """Susun `header` + daftar `blocks` jadi satu atau lebih pesan, masing-
+    masing di bawah `max_chars`. Kalau perlu lebih dari satu pesan, tiap
+    pesan diberi label "(Halaman X/Y)" di header-nya.
+
+    Dipakai bersama oleh /status dan rekap harian/bulanan supaya keduanya
+    tidak pernah mengirim pesan yang melebihi limit 4096 karakter Telegram
+    (dulu rekap harian/bulanan mengirim satu pesan mentah tanpa dipecah,
+    dan bisa gagal terkirim kalau signal closed dalam periode itu banyak).
+
+    Catatan: kalau satu block SENDIRIAN sudah melebihi max_chars (mis. ada
+    ratusan posisi Running sekaligus), block itu tetap dikirim apa adanya
+    di halamannya sendiri (best effort) alih-alih dipotong di tengah HTML,
+    supaya tag HTML tidak rusak."""
+    if not blocks:
+        return [header]
+
+    pages: list[list[str]] = []
+    current: list[str] = []
+    current_len = len(header) + 2
+    for block in blocks:
+        block_len = len(block) + 2
+        if current and current_len + block_len > max_chars:
+            pages.append(current)
+            current = []
+            current_len = len(header) + 2
+        current.append(block)
+        current_len += block_len
+    if current:
+        pages.append(current)
+
+    total_pages = len(pages)
+    messages = []
+    for i, page_blocks in enumerate(pages, start=1):
+        h = header
+        if total_pages > 1:
+            h += f"  <i>(Halaman {i}/{total_pages})</i>"
+        messages.append(h + "\n\n" + "\n\n".join(page_blocks))
+    return messages
 
 
 def status_snapshot_chunks(open_signals: list[dict], targets_by_signal: dict) -> list[str]:
@@ -299,28 +358,7 @@ def status_snapshot_chunks(open_signals: list[dict], targets_by_signal: dict) ->
             )
         )
 
-    pages: list[list[str]] = []
-    current: list[str] = []
-    current_len = len(header) + 2
-    for block in blocks:
-        block_len = len(block) + 2
-        if current and current_len + block_len > _STATUS_MAX_CHARS:
-            pages.append(current)
-            current = []
-            current_len = len(header) + 2
-        current.append(block)
-        current_len += block_len
-    if current:
-        pages.append(current)
-
-    total_pages = len(pages)
-    messages = []
-    for i, page_blocks in enumerate(pages, start=1):
-        h = header
-        if total_pages > 1:
-            h += f"  <i>(Halaman {i}/{total_pages})</i>"
-        messages.append(h + "\n\n" + "\n\n".join(page_blocks))
-    return messages
+    return _paginate_blocks(header, blocks)
 
 
 async def send_daily_recap(bot, for_date: datetime | None = None):
@@ -337,16 +375,20 @@ async def send_daily_recap(bot, for_date: datetime | None = None):
     open_targets_by_signal = database.get_targets_for_signals([s["id"] for s in open_signals])
 
     title = f"📊 <b>REKAP HARIAN</b> — {start_local.strftime('%d %B %Y')}"
-    status_section = _format_live_status(open_signals, signals_with_targets, open_targets_by_signal)
-    result_section = _format_recap("📈 <b>Hasil Closed Hari Ini</b>", signals_with_targets)
+    status_blocks = _format_live_status_blocks(open_signals, signals_with_targets, open_targets_by_signal)
+    result_blocks = _format_recap_blocks("📈 <b>Hasil Closed Hari Ini</b>", signals_with_targets)
 
-    text = f"{title}\n{DIVIDER}\n\n{status_section}\n\n{DIVIDER}\n\n{result_section}"
-    await bot.send_message(
-        chat_id=config.TELEGRAM_CHANNEL_ID,
-        text=text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    # Gabung semua block jadi satu daftar, lalu dipaginasi bareng-bareng
+    # supaya tidak ada satupun pesan yang melebihi limit Telegram, meskipun
+    # hari itu ada banyak posisi live + banyak signal closed sekaligus.
+    all_blocks = status_blocks + [f"{DIVIDER}"] + result_blocks
+    for chunk in _paginate_blocks(f"{title}\n{DIVIDER}", all_blocks):
+        await bot.send_message(
+            chat_id=config.TELEGRAM_CHANNEL_ID,
+            text=chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 async def send_monthly_recap(bot, for_date: datetime | None = None):
@@ -364,13 +406,18 @@ async def send_monthly_recap(bot, for_date: datetime | None = None):
 
     signals = database.get_closed_signals_between(start_utc, end_utc)
     title = f"📅 <b>REKAP BULANAN</b> — {start_local.strftime('%B %Y')}"
-    text = _format_recap(title, _with_targets(signals))
-    await bot.send_message(
-        chat_id=config.TELEGRAM_CHANNEL_ID,
-        text=text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    # Judul singkat untuk block statistik (beda dari title utama di atas,
+    # yang dipakai sebagai header pagination supaya tidak dobel/kosong
+    # ketika hasilnya dipecah jadi lebih dari satu halaman).
+    result_blocks = _format_recap_blocks("📈 <b>Ringkasan</b>", _with_targets(signals))
+
+    for chunk in _paginate_blocks(f"{title}\n{DIVIDER}", result_blocks):
+        await bot.send_message(
+            chat_id=config.TELEGRAM_CHANNEL_ID,
+            text=chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
 
 
 async def daily_recap_job(context):

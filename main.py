@@ -30,11 +30,59 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _is_target_channel(chat) -> bool:
+    """True kalau `chat` adalah channel yang dikonfigurasi di
+    TELEGRAM_CHANNEL_ID. Dipakai supaya kalau bot ini pernah/nanti jadi
+    admin di channel LAIN (mis. buat testing), post di channel lain itu
+    tidak ikut diparse jadi signal / disimpan ke database.
+
+    TELEGRAM_CHANNEL_ID bisa berupa:
+    - numeric chat id, mis. "-1001234567890" (channel private)
+    - "@username" (channel public)
+    """
+    configured = str(config.TELEGRAM_CHANNEL_ID).strip()
+    if configured.startswith("@"):
+        return bool(chat.username) and f"@{chat.username}".lower() == configured.lower()
+    return str(chat.id) == configured
+
+
+def _is_admin(user_id: int | None) -> bool:
+    """True kalau user_id ada di daftar TELEGRAM_ADMIN_IDS. Dipakai untuk
+    membatasi command yang bisa mengubah state (cancel/close) atau memicu
+    kirim pesan ke channel (rekap manual), supaya tidak sembarang orang
+    yang bisa chat ke bot (mis. di grup) bisa membatalkan/menutup posisi."""
+    return user_id is not None and user_id in config.TELEGRAM_ADMIN_IDS
+
+
+async def _reject_non_admin(update: Update) -> bool:
+    """Kalau pemanggil bukan admin: kirim penolakan & return True (supaya
+    caller langsung `return`). Kalau admin: return False (lanjut proses)."""
+    user = update.effective_user
+    if _is_admin(user.id if user else None):
+        return False
+    await update.effective_message.reply_text(
+        "🚫 Command ini cuma bisa dipakai admin yang terdaftar (TELEGRAM_ADMIN_IDS)."
+    )
+    logger.warning(
+        "Percobaan akses command sensitif ditolak: user_id=%s username=%s",
+        user.id if user else None, user.username if user else None,
+    )
+    return True
+
+
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Dipanggil setiap ada post baru di channel (termasuk post kamu sendiri,
     dan post yang di-forward, karena bot jadi admin di channel)."""
     msg = update.effective_message
     if msg is None:
+        return
+
+    if not _is_target_channel(update.effective_chat):
+        logger.info(
+            "Post dari channel lain (chat_id=%s, username=%s) diabaikan — "
+            "bukan TELEGRAM_CHANNEL_ID yang dikonfigurasi.",
+            update.effective_chat.id, update.effective_chat.username,
+        )
         return
 
     # Teks bisa ada di dua tempat tergantung tipe pesan:
@@ -124,7 +172,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/cancel $PAIR -> batalkan posisi yang masih PENDING (belum entry kesentuh)."""
+    """/cancel $PAIR -> batalkan posisi yang masih PENDING (belum entry kesentuh).
+    Hanya bisa dipanggil admin (lihat TELEGRAM_ADMIN_IDS)."""
+    if await _reject_non_admin(update):
+        return
+
     if not context.args:
         await update.effective_message.reply_text(
             "Format: /cancel $PAIR (mis. /cancel $RE atau /cancel RE/USDT)"
@@ -169,7 +221,11 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/close $PAIR -> tutup posisi ACTIVE di harga sekarang, RR dihitung dari harga tutup."""
+    """/close $PAIR -> tutup posisi ACTIVE di harga sekarang, RR dihitung dari harga tutup.
+    Hanya bisa dipanggil admin (lihat TELEGRAM_ADMIN_IDS)."""
+    if await _reject_non_admin(update):
+        return
+
     if not context.args:
         await update.effective_message.reply_text("Format: /close $PAIR (mis. /close $RE)")
         return
@@ -229,10 +285,17 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_rekap_harian(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger manual rekap harian ke channel. Hanya admin, karena ini
+    mengirim pesan ke channel publik/anggota."""
+    if await _reject_non_admin(update):
+        return
     await recap.send_daily_recap(context.bot)
 
 
 async def cmd_rekap_bulanan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger manual rekap bulanan ke channel. Hanya admin."""
+    if await _reject_non_admin(update):
+        return
     await recap.send_monthly_recap(context.bot)
 
 

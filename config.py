@@ -14,6 +14,16 @@ def _get(name: str, default=None, required: bool = False):
 TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN", required=True)
 TELEGRAM_CHANNEL_ID = _get("TELEGRAM_CHANNEL_ID", required=True)
 
+# Daftar user_id Telegram (dipisah koma) yang boleh pakai command sensitif
+# (/cancel, /close, /rekap_harian, /rekap_bulanan). Isi lewat @userinfobot
+# atau sejenisnya untuk dapat user_id kamu. Kalau dikosongkan, SEMUA
+# command sensitif akan ditolak (fail-safe: tidak ada admin yang keliru
+# jadi malah tidak ada proteksi sama sekali).
+_raw_admin_ids = _get("TELEGRAM_ADMIN_IDS", "")
+TELEGRAM_ADMIN_IDS = {
+    int(x.strip()) for x in _raw_admin_ids.split(",") if x.strip()
+}
+
 SUPABASE_URL = _get("SUPABASE_URL", required=True)
 SUPABASE_KEY = _get("SUPABASE_KEY", required=True)
 
