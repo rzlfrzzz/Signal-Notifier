@@ -178,10 +178,10 @@ def get_active_signals_by_symbol(symbol: str) -> list[dict]:
 
 def get_open_signals_by_symbol(symbol: str) -> list[dict]:
     """Semua signal PENDING/ACTIVE untuk satu symbol, tanpa peduli
-    direction/entry/SL. Dipakai buat ngasih tau kalau ada signal lain yang
-    masih jalan di pair yang sama (mis. 2 orang posting pair sama dengan
-    titik entry/SL beda) — beda dari find_duplicate_open_signal yang cuma
-    nangkep duplikat PERSIS (symbol+direction+entry+SL sama semua)."""
+    direction/entry/SL. Dipakai di main.py buat menolak signal baru kalau
+    pair ini sudah ada posisi lain yang masih berjalan (baik itu duplikat
+    persis maupun beda entry/SL/direction) — supaya tidak pernah ada 2
+    posisi terbuka nimpa di pair yang sama."""
     client = get_client()
     res = (
         client.table("signals")
@@ -191,27 +191,6 @@ def get_open_signals_by_symbol(symbol: str) -> list[dict]:
         .execute()
     )
     return res.data
-
-
-def find_duplicate_open_signal(*, symbol: str, direction: str, entry: float,
-                                stoploss: float) -> Optional[dict]:
-    """Cek apakah sudah ada signal identik (symbol + direction + entry +
-    stoploss) yang statusnya masih PENDING atau ACTIVE. Dipakai supaya
-    signal yang ke-post dobel (mis. ke-forward ulang / typo repost) tidak
-    disimpan dua kali."""
-    client = get_client()
-    res = (
-        client.table("signals")
-        .select("*")
-        .eq("symbol", symbol)
-        .eq("direction", direction)
-        .eq("entry", entry)
-        .eq("stoploss", stoploss)
-        .in_("status", ["PENDING", "ACTIVE"])
-        .limit(1)
-        .execute()
-    )
-    return res.data[0] if res.data else None
 
 
 def update_last_price(signal_id: int, price: float):

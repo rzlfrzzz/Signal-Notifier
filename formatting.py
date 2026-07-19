@@ -38,12 +38,12 @@ def pair_title(pair: str, direction: str) -> str:
 # Signal baru terdeteksi (reply ke post channel)
 # ---------------------------------------------------------------------------
 
-def new_signal(parsed, conflicts: list[dict] | None = None) -> str:
+def new_signal(parsed) -> str:
     tp_lines = "\n".join(
         f"   TP{t.level} · RR 1:{fmt_num(t.rr)} → <code>{fmt_num(t.price)}</code>"
         for t in parsed.targets
     )
-    text = (
+    return (
         f"📥 <b>SIGNAL BARU TERCATAT</b>\n"
         f"{DIVIDER}\n"
         f"{pair_title(parsed.pair, parsed.direction)}\n\n"
@@ -53,22 +53,6 @@ def new_signal(parsed, conflicts: list[dict] | None = None) -> str:
         f"{tp_lines}\n\n"
         f"<i>Status: menunggu harga entry tersentuh...</i>"
     )
-
-    if conflicts:
-        conflict_lines = "\n".join(
-            f"   • {direction_badge(c['direction'])} · Entry <code>{fmt_num(c['entry'])}</code> "
-            f"· SL <code>{fmt_num(c['stoploss'])}</code> · <b>{esc(c['status'])}</b>"
-            for c in conflicts
-        )
-        text += (
-            f"\n\n{DIVIDER}\n"
-            f"⚠️ <b>PERHATIAN — sudah ada signal lain yang masih berjalan di "
-            f"{esc(parsed.pair)}:</b>\n"
-            f"{conflict_lines}\n"
-            f"<i>Cek lagi supaya tidak bentrok / dobel posisi di pair yang sama.</i>"
-        )
-
-    return text
 
 
 def duplicate_signal(parsed, dup: dict) -> str:
@@ -80,6 +64,30 @@ def duplicate_signal(parsed, dup: dict) -> str:
         f"Entry <code>{fmt_num(parsed.entry)}</code> · "
         f"SL <code>{fmt_num(parsed.stoploss)}</code>\n\n"
         f"<i>Diabaikan supaya tidak tercatat dobel.</i>"
+    )
+
+
+def rejected_conflicting_signal(parsed, existing: list[dict]) -> str:
+    """Signal baru ditolak (tidak disimpan) karena pair ini sudah ada
+    posisi lain yang masih PENDING/ACTIVE — meskipun entry/SL/direction-nya
+    beda dari signal baru ini. Dipakai supaya tidak ada 2 posisi nimpa di
+    pair yang sama, mis. kamu sudah posting manual lalu analyst/bot lain
+    ikut posting pair yang sama belakangan."""
+    existing_lines = "\n".join(
+        f"   • {direction_badge(e['direction'])} · Entry <code>{fmt_num(e['entry'])}</code> "
+        f"· SL <code>{fmt_num(e['stoploss'])}</code> · <b>{esc(e['status'])}</b>"
+        for e in existing
+    )
+    return (
+        f"🚫 <b>SIGNAL DIABAIKAN — MASIH ADA POSISI TERBUKA</b>\n"
+        f"{DIVIDER}\n"
+        f"{pair_title(parsed.pair, parsed.direction)}\n\n"
+        f"Entry baru <code>{fmt_num(parsed.entry)}</code> · "
+        f"SL baru <code>{fmt_num(parsed.stoploss)}</code>\n\n"
+        f"Posisi yang masih berjalan di {esc(parsed.pair)}:\n"
+        f"{existing_lines}\n\n"
+        f"<i>Diabaikan supaya tidak dobel posisi di pair yang sama. Kalau posisi lama "
+        f"memang sudah tidak relevan, /cancel atau /close dulu baru repost.</i>"
     )
 
 

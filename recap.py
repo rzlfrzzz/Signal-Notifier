@@ -137,24 +137,19 @@ def _recap_detail_line(s: dict, t: list[dict]) -> str:
 _DETAIL_LINES_PER_BLOCK = 15
 
 
-def _format_recap_blocks(
-    title: str, signals_with_targets: list[tuple[dict, list[dict]]]
-) -> list[str]:
-    """Pecah rekap (statistik + detail per-signal) jadi beberapa block teks,
-    supaya bisa dipaginasi oleh `_paginate_blocks` tanpa melebihi limit
-    karakter pesan Telegram."""
+def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
+    """Bangun satu block teks statistik (tanpa detail per-signal) untuk
+    sebuah periode. Dipakai baik untuk rekap penuh (_format_recap_blocks)
+    maupun ringkasan singkat (mis. bulan lalu di rekap bulanan manual)."""
     total = len(signals_with_targets)
     if total == 0:
-        return [f"{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"]
+        return f"{title}\n{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"
 
     wins = [s for s, _ in signals_with_targets if s["result"] == "WIN"]
     losses = [s for s, _ in signals_with_targets if s["result"] == "LOSS"]
     mixed = [s for s, _ in signals_with_targets if s["result"] == "MIXED"]
     manual = [s for s, _ in signals_with_targets if s["result"] == "MANUAL"]
 
-    # Manual close ikut dihitung sebagai win/loss di Win Rate berdasarkan
-    # hasil realized_pct-nya (profit -> win, minus -> loss), bukan otomatis
-    # dianggap "bukan win" hanya karena ditutup manual.
     manual_wins = [s for s, t in signals_with_targets
                    if s["result"] == "MANUAL" and _manual_is_win(s, t)]
     manual_losses = [s for s, t in signals_with_targets
@@ -177,7 +172,18 @@ def _format_recap_blocks(
     stats_lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
     stats_lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
 
-    blocks = ["\n".join(stats_lines)]
+    return "\n".join(stats_lines)
+
+
+def _format_recap_blocks(
+    title: str, signals_with_targets: list[tuple[dict, list[dict]]]
+) -> list[str]:
+    """Pecah rekap (statistik + detail per-signal) jadi beberapa block teks,
+    supaya bisa dipaginasi oleh `_paginate_blocks` tanpa melebihi limit
+    karakter pesan Telegram."""
+    blocks = [_stats_block(title, signals_with_targets)]
+    if not signals_with_targets:
+        return blocks
 
     detail_lines = [_recap_detail_line(s, t) for s, t in signals_with_targets]
     for i in range(0, len(detail_lines), _DETAIL_LINES_PER_BLOCK):
@@ -412,6 +418,52 @@ async def send_monthly_recap(bot, for_date: datetime | None = None):
     result_blocks = _format_recap_blocks("📈 <b>Ringkasan</b>", _with_targets(signals))
 
     for chunk in _paginate_blocks(f"{title}\n{DIVIDER}", result_blocks):
+        await bot.send_message(
+            chat_id=config.TELEGRAM_CHANNEL_ID,
+            text=chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+
+async def send_monthly_recap_manual(bot, for_date: datetime | None = None):
+    """Rekap bulanan versi manual (dipicu /rekap_bulanan): tampilkan progres
+    BULAN INI (month-to-date, dari tanggal 1 s/d sekarang) lengkap dengan
+    detail per-signal, plus ringkasan singkat (statistik saja, tanpa detail)
+    BULAN LALU sebagai pembanding.
+
+    Beda dengan `send_monthly_recap` (dipakai job otomatis tanggal 1) yang
+    selalu merekap bulan yang baru saja selesai."""
+    now_local = for_date or datetime.now(TZ)
+
+    this_month_start = TZ.localize(datetime(now_local.year, now_local.month, 1))
+    this_month_start_utc = this_month_start.astimezone(pytz.utc).isoformat()
+    now_utc = now_local.astimezone(pytz.utc).isoformat()
+
+    last_month_end_local = this_month_start
+    last_month_start_local = (this_month_start - timedelta(days=1)).replace(day=1)
+    last_month_start_utc = last_month_start_local.astimezone(pytz.utc).isoformat()
+    last_month_end_utc = last_month_end_local.astimezone(pytz.utc).isoformat()
+
+    this_month_signals = database.get_closed_signals_between(this_month_start_utc, now_utc)
+    last_month_signals = database.get_closed_signals_between(last_month_start_utc, last_month_end_utc)
+
+    title = (
+        f"📅 <b>REKAP BULANAN</b> — {now_local.strftime('%B %Y')} "
+        f"<i>(berjalan s/d {now_local.strftime('%d %b')})</i>"
+    )
+
+    this_month_blocks = _format_recap_blocks(
+        "📈 <b>Periode Bulan Ini</b>", _with_targets(this_month_signals)
+    )
+    last_month_summary_block = _stats_block(
+        f"📊 <b>Ringkasan Bulan Lalu</b> — {last_month_start_local.strftime('%B %Y')}",
+        _with_targets(last_month_signals),
+    )
+
+    all_blocks = this_month_blocks + [DIVIDER, last_month_summary_block]
+
+    for chunk in _paginate_blocks(f"{title}\n{DIVIDER}", all_blocks):
         await bot.send_message(
             chat_id=config.TELEGRAM_CHANNEL_ID,
             text=chunk,

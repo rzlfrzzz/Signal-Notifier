@@ -106,21 +106,41 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return  # bukan format signal, abaikan (pengumuman dll)
 
-    dup = database.find_duplicate_open_signal(
-        symbol=parsed.symbol,
-        direction=parsed.direction,
-        entry=parsed.entry,
-        stoploss=parsed.stoploss,
-    )
-    if dup is not None:
-        logger.info(
-            "Message_id=%s adalah duplikat signal id=%s (status=%s), diabaikan.",
-            msg.message_id, dup["id"], dup["status"],
+    # Tolak total kalau pair ini sudah punya posisi PENDING/ACTIVE lain yang
+    # masih berjalan — TIDAK PEDULI entry/SL/direction sama atau beda.
+    # Dulu signal yang beda entry/SL/direction tetap disimpan (cuma dikasih
+    # warning), tapi ini sering menyebabkan posisi dobel di pair yang sama
+    # (mis. sudah posting manual, lalu analyst/bot lain posting ulang pair
+    # yang sama beberapa jam/hari kemudian). Sekarang ditolak semua supaya
+    # tidak ada 2 posisi nimpa; admin bisa /cancel atau /close posisi lama
+    # dulu kalau memang mau ganti dengan setup baru.
+    existing_open = database.get_open_signals_by_symbol(parsed.symbol)
+    if existing_open:
+        exact_dup = next(
+            (s for s in existing_open
+             if s["direction"] == parsed.direction
+             and s["entry"] == parsed.entry
+             and s["stoploss"] == parsed.stoploss),
+            None,
         )
-        await msg.reply_text(
-            formatting.duplicate_signal(parsed, dup),
-            parse_mode="HTML",
-        )
+        if exact_dup is not None:
+            logger.info(
+                "Message_id=%s adalah duplikat signal id=%s (status=%s), diabaikan.",
+                msg.message_id, exact_dup["id"], exact_dup["status"],
+            )
+            await msg.reply_text(
+                formatting.duplicate_signal(parsed, exact_dup),
+                parse_mode="HTML",
+            )
+        else:
+            logger.info(
+                "Message_id=%s ditolak: sudah ada %d posisi terbuka lain di symbol %s.",
+                msg.message_id, len(existing_open), parsed.symbol,
+            )
+            await msg.reply_text(
+                formatting.rejected_conflicting_signal(parsed, existing_open),
+                parse_mode="HTML",
+            )
         return
 
     row = database.insert_signal(
@@ -140,22 +160,8 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         [(t.level, t.rr, t.price) for t in parsed.targets],
     )
 
-    # Signal lain (selain yang baru saja disimpan) yang masih PENDING/ACTIVE
-    # di pair yang sama, meskipun entry/SL/direction beda -> bukan duplikat
-    # persis, tapi tetap perlu di-flag supaya kelihatan kalau ada 2 signal
-    # nimpa di pair yang sama (mis. kamu & temanmu posting bareng).
-    conflicts = [
-        s for s in database.get_open_signals_by_symbol(parsed.symbol)
-        if s["id"] != row["id"]
-    ]
-    if conflicts:
-        logger.info(
-            "Message_id=%s: ada %d signal lain yang masih terbuka di symbol %s.",
-            msg.message_id, len(conflicts), parsed.symbol,
-        )
-
     await msg.reply_text(
-        formatting.new_signal(parsed, conflicts),
+        formatting.new_signal(parsed),
         parse_mode="HTML",
     )
 
@@ -293,10 +299,14 @@ async def cmd_rekap_harian(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_rekap_bulanan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Trigger manual rekap bulanan ke channel. Hanya admin."""
+    """Trigger manual rekap bulanan ke channel. Hanya admin.
+
+    Beda dengan job otomatis tanggal 1 (yang merekap bulan sebelumnya penuh),
+    trigger manual ini menampilkan progres bulan berjalan (month-to-date)
+    plus ringkasan singkat bulan lalu sebagai pembanding."""
     if await _reject_non_admin(update):
         return
-    await recap.send_monthly_recap(context.bot)
+    await recap.send_monthly_recap_manual(context.bot)
 
 
 def main():
