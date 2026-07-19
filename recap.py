@@ -14,6 +14,8 @@ yang closed pada periode itu (TP/Partial/SL/Manual). Tiap pair di-hyperlink
 ke pesan signal aslinya di channel.
 """
 import html
+import re
+from collections import Counter
 from datetime import datetime, timedelta
 
 import pytz
@@ -137,40 +139,154 @@ def _recap_detail_line(s: dict, t: list[dict]) -> str:
 _DETAIL_LINES_PER_BLOCK = 15
 
 
+def _mixed_tp_label(targets: list[dict]) -> str:
+    """Label ringkas level TP yang tercapai sebelum SL kena, mis. 'TP1 only'
+    untuk satu level, atau 'TP1-TP2' untuk beberapa level berurutan."""
+    hit_levels = sorted(t["level"] for t in targets if t["status"] == "HIT")
+    if not hit_levels:
+        return "No TP hit"
+    if len(hit_levels) == 1:
+        return f"TP{hit_levels[0]} only"
+    return f"TP{hit_levels[0]}-TP{hit_levels[-1]}"
+
+
+def _mixed_breakdown(mixed_with_targets: list[tuple[dict, list[dict]]]) -> str:
+    """Breakdown signal MIXED berdasarkan level TP yang tercapai sebelum SL,
+    mis. 'TP1 only : 7, TP1-TP2 : 4'. Jauh lebih informatif buat evaluasi
+    strategi partial-TP dibanding cuma menampilkan total jumlah Mixed."""
+    if not mixed_with_targets:
+        return ""
+    counter = Counter(_mixed_tp_label(t) for _, t in mixed_with_targets)
+
+    def _sort_key(item):
+        nums = re.findall(r"\d+", item[0])
+        return int(nums[0]) if nums else 0
+
+    ordered = sorted(counter.items(), key=_sort_key)
+    return ", ".join(f"{label} : {count}" for label, count in ordered)
+
+
+def _fmt_ratio(value: float) -> str:
+    """Format rasio (Profit Factor / Avg Reward-Risk) dengan penanganan
+    kasus pembagi nol (tidak ada loss sama sekali -> tak terhingga)."""
+    if value == float("inf"):
+        return "∞"
+    return f"{value:.2f}"
+
+
+def _performance_metrics(signals_with_targets: list[tuple[dict, list[dict]]]) -> dict:
+    """Metrik performa profesional (Net Result, Profit Factor, Avg Win/Loss,
+    Avg Reward/Risk), dihitung dari realized R-multiple SEMUA signal closed.
+
+    PENTING: klasifikasi profit/loss di sini pakai TANDA realized RR
+    (rr > 0 = profit trade, rr < 0 = loss trade) - BUKAN label outcome
+    (WIN/MIXED/LOSS/MANUAL). Ini standar profesional karena signal MIXED
+    atau MANUAL tetap bisa net profit meski bukan 'WIN' murni (begitu juga
+    sebaliknya), jadi Profit Factor/Avg Win/Avg Loss harus mencerminkan
+    hasil R aktual, bukan kategori penutupannya.
+
+    R-multiple dipakai (bukan %) karena tiap signal punya jarak SL beda-beda
+    -> 1R selalu merepresentasikan risiko yang sama secara proporsional,
+    jadi bisa dijumlah/dirata-rata apple-to-apple antar signal. Persentase
+    cuma dipakai sebagai info tambahan (lihat _realized_pct), bukan basis
+    Net Result/Profit Factor.
+    """
+    rr_values = [_realized_rr(s, t) for s, t in signals_with_targets]
+    profit_rrs = [rr for rr in rr_values if rr > 0]
+    loss_rrs = [rr for rr in rr_values if rr < 0]
+
+    gross_profit = sum(profit_rrs)
+    gross_loss = abs(sum(loss_rrs))
+
+    avg_win = (gross_profit / len(profit_rrs)) if profit_rrs else 0.0
+    avg_loss = -(gross_loss / len(loss_rrs)) if loss_rrs else 0.0
+
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    else:
+        profit_factor = float("inf") if gross_profit > 0 else 0.0
+
+    if avg_loss != 0:
+        avg_rr_ratio = abs(avg_win / avg_loss)
+    else:
+        avg_rr_ratio = float("inf") if avg_win > 0 else 0.0
+
+    return {
+        "net_rr": sum(rr_values),
+        "profit_factor": profit_factor,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "avg_rr_ratio": avg_rr_ratio,
+    }
+
+
 def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
     """Bangun satu block teks statistik (tanpa detail per-signal) untuk
     sebuah periode. Dipakai baik untuk rekap penuh (_format_recap_blocks)
-    maupun ringkasan singkat (mis. bulan lalu di rekap bulanan manual)."""
+    maupun ringkasan singkat (mis. bulan lalu di rekap bulanan manual).
+
+    Urutan tampilan diprioritaskan dari metrik paling penting ke paling
+    kurang penting buat evaluasi strategi: (1) Net Result R, (2) Profit
+    Factor, (3) Win Rate, (4) Avg Win/Loss & Avg Reward-Risk, (5) breakdown
+    jumlah outcome, (6) persentase (cuma info tambahan). Manual Closed
+    ditampilkan terpisah sebagai metadata metode-exit, BUKAN sebagai
+    kategori outcome (karena hasil aktualnya sudah tercermin di Win/Loss
+    lewat reklasifikasi win/loss manual)."""
     total = len(signals_with_targets)
     if total == 0:
         return f"{title}\n{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"
 
     wins = [s for s, _ in signals_with_targets if s["result"] == "WIN"]
     losses = [s for s, _ in signals_with_targets if s["result"] == "LOSS"]
-    mixed = [s for s, _ in signals_with_targets if s["result"] == "MIXED"]
-    manual = [s for s, _ in signals_with_targets if s["result"] == "MANUAL"]
+    mixed_wt = [(s, t) for s, t in signals_with_targets if s["result"] == "MIXED"]
+    manual_wt = [(s, t) for s, t in signals_with_targets if s["result"] == "MANUAL"]
 
-    manual_wins = [s for s, t in signals_with_targets
-                   if s["result"] == "MANUAL" and _manual_is_win(s, t)]
-    manual_losses = [s for s, t in signals_with_targets
-                      if s["result"] == "MANUAL" and not _manual_is_win(s, t)]
+    manual_wins = [s for s, t in manual_wt if _manual_is_win(s, t)]
+    manual_losses = [s for s, t in manual_wt if not _manual_is_win(s, t)]
 
+    # Win Rate secara eksplisit disebut "termasuk manual win" supaya
+    # transparan bahwa manual close yang net profit ikut dihitung di
+    # pembilang - bukan cuma outcome WIN otomatis.
     win_rate = ((len(wins) + len(manual_wins)) / total) * 100
     total_pct = sum(_realized_pct(s, t) for s, t in signals_with_targets)
-    pct_icon = "🟩" if total_pct >= 0 else "🟥"
+
+    perf = _performance_metrics(signals_with_targets)
+    net_icon = "🟩" if perf["net_rr"] >= 0 else "🟥"
+    mixed_breakdown_str = _mixed_breakdown(mixed_wt)
 
     stats_lines = [title, DIVIDER, ""]
-    stats_lines.append(f"Total Signal   <b>{total}</b>")
-    stats_lines.append(f"✅ Win     : <b>{len(wins)}</b>")
-    stats_lines.append(f"🟡 Mixed   : <b>{len(mixed)}</b>  <i>(partial TP sebelum SL)</i>")
-    stats_lines.append(f"🛑 Loss    : <b>{len(losses)}</b>")
+
+    # 1) Net Result — metrik utama (R-multiple, % cuma info tambahan)
     stats_lines.append(
-        f"🔧 Manual  : <b>{len(manual)}</b>  "
-        f"<i>(ditutup via /close — {len(manual_wins)} win, {len(manual_losses)} loss)</i>"
+        f"Net Result      {net_icon} <b>{perf['net_rr']:+.2f}R</b>  <i>({total_pct:+.2f}%)</i>"
+    )
+    # 2) Profit Factor — kesehatan strategi
+    stats_lines.append(f"Profit Factor   <b>{_fmt_ratio(perf['profit_factor'])}</b>")
+    # 3) Win Rate
+    stats_lines.append(
+        f"Win Rate        {_bar(win_rate)}  <b>{win_rate:.1f}%</b>  "
+        f"<i>(termasuk manual win)</i>"
     )
     stats_lines.append("")
-    stats_lines.append(f"Win Rate   {_bar(win_rate)}  <b>{win_rate:.1f}%</b>")
-    stats_lines.append(f"Total Hasil   {pct_icon} <b>{total_pct:+.2f}%</b>")
+    # 4) Karakteristik strategi: Avg Win/Loss & Avg Reward-Risk
+    stats_lines.append(f"Avg Win         <b>{perf['avg_win']:+.2f}R</b>")
+    stats_lines.append(f"Avg Loss        <b>{perf['avg_loss']:+.2f}R</b>")
+    stats_lines.append(f"Avg Reward/Risk <b>{_fmt_ratio(perf['avg_rr_ratio'])}</b>")
+    stats_lines.append("")
+    # 5) Breakdown jumlah outcome (Manual TIDAK termasuk kategori outcome)
+    stats_lines.append(f"Total Signal    <b>{total}</b>")
+    stats_lines.append("<b>Outcome</b>")
+    stats_lines.append(f"✅ Win      : <b>{len(wins)}</b>")
+    mixed_suffix = f"  <i>({mixed_breakdown_str})</i>" if mixed_breakdown_str else ""
+    stats_lines.append(f"🟡 Mixed    : <b>{len(mixed_wt)}</b>{mixed_suffix}")
+    stats_lines.append(f"🛑 Loss     : <b>{len(losses)}</b>")
+    stats_lines.append("")
+    # Manual close = metadata metode-exit, direklasifikasi jadi W/L aktual,
+    # ditampilkan terpisah dari Outcome supaya tidak dobel-hitung.
+    stats_lines.append(
+        f"Manual Closed   : <b>{len(manual_wt)}</b> "
+        f"<i>({len(manual_wins)}W / {len(manual_losses)}L)</i>"
+    )
 
     return "\n".join(stats_lines)
 
