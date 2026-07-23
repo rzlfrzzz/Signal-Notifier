@@ -27,6 +27,13 @@ create table if not exists signals (
     realized_rr     numeric,                 -- RR aktual saat closed (auto atau manual via /close)
     raw_message     text,
     last_price      numeric,
+    analyst         text not null default 'Unknown',
+                    -- Nama analis/pengirim signal. Diisi otomatis oleh bot:
+                    -- 1) dari label eksplisit di teks pesan (mis. "Analyst: Budi"),
+                    -- 2) fallback ke author_signature Telegram (kalau "Sign
+                    --    messages" aktif di channel),
+                    -- 3) fallback terakhir "Unknown".
+                    -- Dipakai untuk breakdown win rate per analis di rekap.
     created_at      timestamptz not null default now(),
     entry_hit_at    timestamptz,
     closed_at       timestamptz
@@ -35,6 +42,7 @@ create table if not exists signals (
 create index if not exists idx_signals_status on signals(status);
 create index if not exists idx_signals_symbol on signals(symbol);
 create index if not exists idx_signals_closed_at on signals(closed_at);
+create index if not exists idx_signals_analyst on signals(analyst);
 
 -- Multi level Take Profit per signal (TP1 = RR 1:1, TP2 = RR 1:2, dst)
 create table if not exists signal_targets (
@@ -73,6 +81,13 @@ alter table signals alter column rr drop not null;
 -- close lewat /close). Rekap membaca kolom ini, dengan fallback hitung
 -- ulang dari signal_targets untuk data lama yang belum terisi.
 alter table signals add column if not exists realized_rr numeric;
+
+-- Kolom analyst: nama analis/pengirim signal (lihat penjelasan di skema
+-- fresh di atas). Data lama yang belum punya nilai otomatis di-backfill
+-- 'Unknown' oleh default value ini, supaya kode rekap yang membaca
+-- signal.get("analyst") tidak pernah None untuk baris lama.
+alter table signals add column if not exists analyst text not null default 'Unknown';
+create index if not exists idx_signals_analyst on signals(analyst);
 
 -- Status 'CANCELLED' (dipakai oleh command /cancel) dan result 'MANUAL'
 -- (dipakai oleh command /close) tidak butuh migrasi kolom karena status

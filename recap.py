@@ -113,6 +113,50 @@ def _bar(pct: float, size: int = 10) -> str:
     return "█" * filled + "░" * (size - filled)
 
 
+def _analyst_label(signal: dict) -> str:
+    """Nama analis/pengirim signal, fallback 'Unknown' untuk data lama
+    (sebelum kolom `analyst` ada) atau signal yang tidak berhasil
+    dideteksi pengirimnya sama sekali."""
+    return signal.get("analyst") or "Unknown"
+
+
+def _analyst_breakdown_block(signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
+    """Block 'Win Rate per Analis': breakdown W/L dan Net R per analis
+    dari daftar signal closed pada periode rekap ini. Signal MANUAL
+    direklasifikasi jadi win/loss lewat _manual_is_win, konsisten dengan
+    _stats_block. Diurutkan dari win rate tertinggi ke terendah."""
+    if not signals_with_targets:
+        return ""
+
+    groups: dict[str, list[tuple[dict, list[dict]]]] = {}
+    for s, t in signals_with_targets:
+        groups.setdefault(_analyst_label(s), []).append((s, t))
+
+    rows = []
+    for analyst, items in groups.items():
+        total = len(items)
+        wins = sum(
+            1 for s, t in items
+            if s["result"] == "WIN" or (s["result"] == "MANUAL" and _manual_is_win(s, t))
+        )
+        losses = total - wins
+        win_rate = (wins / total) * 100 if total else 0.0
+        net_rr = sum(_realized_rr(s, t) for s, t in items)
+        rows.append((analyst, total, wins, losses, win_rate, net_rr))
+
+    # Urutkan: win rate tertinggi dulu, lalu jumlah signal terbanyak sebagai tie-breaker.
+    rows.sort(key=lambda r: (r[4], r[1]), reverse=True)
+
+    lines = ["👤 <b>Win Rate per Analis</b>", DIVIDER]
+    for analyst, total, wins, losses, win_rate, net_rr in rows:
+        net_icon = "🟩" if net_rr >= 0 else "🟥"
+        lines.append(
+            f"• <b>{html.escape(analyst)}</b> — {win_rate:.1f}% "
+            f"<i>({wins}W/{losses}L dari {total})</i>  {net_icon} <b>{net_rr:+.2f}R</b>"
+        )
+    return "\n".join(lines)
+
+
 def _recap_detail_line(s: dict, t: list[dict]) -> str:
     """Satu baris detail untuk satu signal yang closed."""
     if s["result"] == "MANUAL":
@@ -126,8 +170,9 @@ def _recap_detail_line(s: dict, t: list[dict]) -> str:
         levels_text = "closed manual"
     else:
         levels_text = f"TP{','.join(str(l) for l in hit_levels)} hit" if hit_levels else "no TP hit"
+    analyst_tag = f"<i>{html.escape(_analyst_label(s))}</i> · "
     return (
-        f"{icon} {_pair_html(s)} ({s['direction']}) — "
+        f"{icon} {analyst_tag}{_pair_html(s)} ({s['direction']}) — "
         f"<b>{pct:+.2f}%</b>  <i>({rr:+.2f}R · {levels_text})</i>"
     )
 
@@ -300,6 +345,10 @@ def _format_recap_blocks(
     blocks = [_stats_block(title, signals_with_targets)]
     if not signals_with_targets:
         return blocks
+
+    analyst_block = _analyst_breakdown_block(signals_with_targets)
+    if analyst_block:
+        blocks.append(analyst_block)
 
     detail_lines = [_recap_detail_line(s, t) for s, t in signals_with_targets]
     for i in range(0, len(detail_lines), _DETAIL_LINES_PER_BLOCK):
@@ -572,12 +621,16 @@ async def send_monthly_recap_manual(bot, for_date: datetime | None = None):
     this_month_blocks = _format_recap_blocks(
         "📈 <b>Periode Bulan Ini</b>", _with_targets(this_month_signals)
     )
+    last_month_with_targets = _with_targets(last_month_signals)
     last_month_summary_block = _stats_block(
         f"📊 <b>Ringkasan Bulan Lalu</b> — {last_month_start_local.strftime('%B %Y')}",
-        _with_targets(last_month_signals),
+        last_month_with_targets,
     )
+    last_month_analyst_block = _analyst_breakdown_block(last_month_with_targets)
 
     all_blocks = this_month_blocks + [DIVIDER, last_month_summary_block]
+    if last_month_analyst_block:
+        all_blocks.append(last_month_analyst_block)
 
     for chunk in _paginate_blocks(f"{title}\n{DIVIDER}", all_blocks):
         await bot.send_message(

@@ -38,7 +38,7 @@ def pair_title(pair: str, direction: str) -> str:
 # Signal baru terdeteksi (reply ke post channel)
 # ---------------------------------------------------------------------------
 
-def new_signal(parsed) -> str:
+def new_signal(parsed, analyst: str = "Unknown") -> str:
     tp_lines = "\n".join(
         f"   TP{t.level} · RR 1:{fmt_num(t.rr)} → <code>{fmt_num(t.price)}</code>"
         for t in parsed.targets
@@ -46,7 +46,8 @@ def new_signal(parsed) -> str:
     return (
         f"📥 <b>SIGNAL BARU TERCATAT</b>\n"
         f"{DIVIDER}\n"
-        f"{pair_title(parsed.pair, parsed.direction)}\n\n"
+        f"{pair_title(parsed.pair, parsed.direction)}\n"
+        f"👤 Analis    <b>{esc(analyst)}</b>\n\n"
         f"Entry      <code>{fmt_num(parsed.entry)}</code>\n"
         f"Stoploss   <code>{fmt_num(parsed.stoploss)}</code>\n\n"
         f"🎯 <b>Take Profit</b>\n"

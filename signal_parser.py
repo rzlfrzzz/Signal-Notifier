@@ -20,6 +20,7 @@ class ParsedSignal:
     entry: float
     stoploss: float
     targets: list[TargetLevel]   # TP1, TP2, TP3, ...
+    analyst: Optional[str] = None  # nama analis kalau tercantum di teks signal (lihat _ANALYST_RE)
 
 
 _DIRECTION_RE = re.compile(r"\b(LONG|SHORT)\b", re.IGNORECASE)
@@ -28,6 +29,15 @@ _PAIR_DOLLAR_RE = re.compile(r"\$([A-Za-z0-9]+)(?:\s*/\s*([A-Za-z]{2,6}))?")
 _ENTRY_RE = re.compile(r"Entry\s*:?\s*\$?\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
 _SL_RE = re.compile(r"(?:Stop\s*-?\s*Loss|Stoploss|SL)\s*:?\s*\$?\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
 _RR_RE = re.compile(r"RR\s*:?\s*1\s*:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+# Nama analis/pengirim signal, kalau dicantumkan eksplisit di teks pesan,
+# mis. "Analyst: John", "Analis : Budi_FX", "Signal by @trader_jaya", "Dari: Rina".
+# Kalau tidak ada label ini di teks, main.py akan fallback ke
+# author_signature Telegram (kalau "Sign messages" aktif di channel), lalu
+# fallback terakhir ke "Unknown".
+_ANALYST_RE = re.compile(
+    r"(?:Analyst|Analis|Signal\s*by|Dari)\s*:?\s*@?([A-Za-z0-9_.\- ]{2,40})",
+    re.IGNORECASE,
+)
 
 
 def _normalize_symbol(ticker: str, quote: Optional[str]) -> tuple[str, str]:
@@ -120,6 +130,9 @@ def parse_signal(text: str) -> Optional[ParsedSignal]:
 
     targets = _build_targets(direction, entry, stoploss, rr_max)
 
+    analyst_match = _ANALYST_RE.search(text)
+    analyst = analyst_match.group(1).strip().rstrip(".,-") if analyst_match else None
+
     return ParsedSignal(
         pair=display_pair,
         symbol=symbol,
@@ -127,4 +140,5 @@ def parse_signal(text: str) -> Optional[ParsedSignal]:
         entry=entry,
         stoploss=stoploss,
         targets=targets,
+        analyst=analyst,
     )

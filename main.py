@@ -143,6 +143,14 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return
 
+    # Tentukan analis/pengirim signal, dengan urutan prioritas:
+    # 1. Label eksplisit di teks pesan (mis. "Analyst: Budi") -> parsed.analyst
+    # 2. author_signature Telegram -> otomatis terisi kalau opsi "Sign
+    #    messages" diaktifkan di pengaturan channel, isinya nama admin yang
+    #    posting pesan itu.
+    # 3. "Unknown" -> fallback terakhir kalau dua-duanya tidak ada.
+    analyst = parsed.analyst or msg.author_signature or "Unknown"
+
     row = database.insert_signal(
         message_id=msg.message_id,
         chat_id=msg.chat_id,
@@ -152,16 +160,18 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         entry=parsed.entry,
         stoploss=parsed.stoploss,
         raw_message=text,
+        analyst=analyst,
     )
     database.insert_targets(row["id"], parsed.targets)
     logger.info(
-        "Signal baru tersimpan: %s (targets: %s)",
+        "Signal baru tersimpan: %s (targets: %s, analyst=%s)",
         row,
         [(t.level, t.rr, t.price) for t in parsed.targets],
+        analyst,
     )
 
     await msg.reply_text(
-        formatting.new_signal(parsed),
+        formatting.new_signal(parsed, analyst),
         parse_mode="HTML",
     )
 

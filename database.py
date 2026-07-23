@@ -22,7 +22,7 @@ def _now_iso() -> str:
 
 def insert_signal(*, message_id: int, chat_id: int, pair: str, symbol: str,
                    direction: str, entry: float, stoploss: float,
-                   raw_message: str) -> dict:
+                   raw_message: str, analyst: str = "Unknown") -> dict:
     client = get_client()
     row = {
         "message_id": message_id,
@@ -34,6 +34,7 @@ def insert_signal(*, message_id: int, chat_id: int, pair: str, symbol: str,
         "stoploss": stoploss,
         "status": "PENDING",
         "raw_message": raw_message,
+        "analyst": analyst,
     }
     res = client.table("signals").insert(row).execute()
     return res.data[0]
