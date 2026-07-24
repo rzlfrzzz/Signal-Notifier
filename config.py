@@ -39,3 +39,8 @@ MONTHLY_RECAP_HOUR = int(_get("MONTHLY_RECAP_HOUR", "8"))
 MONTHLY_RECAP_MINUTE = int(_get("MONTHLY_RECAP_MINUTE", "0"))
 
 MEXC_TICKER_ALL_URL = "https://api.mexc.com/api/v3/ticker/price"
+# Endpoint Futures (kontrak perpetual) — dipakai sebagai FALLBACK kalau
+# suatu pair ternyata cuma listing di MEXC Futures, bukan Spot (mis. token
+# baru yang awalnya cuma dibuka Futures dulu, atau produk derivatif
+# seperti SAMSUNGUSDT yang memang tidak ada versi Spot-nya).
+MEXC_FUTURES_TICKER_ALL_URL = "https://contract.mexc.com/api/v1/contract/ticker"

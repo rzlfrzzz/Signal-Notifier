@@ -28,6 +28,26 @@ import rr_calc
 
 logger = logging.getLogger(__name__)
 
+# Signal id yang sudah pernah dapat notifikasi satu kali terkait sumber
+# harganya: entah karena symbol-nya tidak ketemu di Spot MAUPUN Futures
+# MEXC (warning ke admin), atau karena symbol-nya cuma ada di Futures jadi
+# dipantau pakai harga Futures (info log saja). In-memory saja (reset
+# kalau proses restart) — cukup untuk mencegah notifikasi spam tiap poll
+# (default tiap 10 detik) selama proses jalan terus.
+_notified_signal_ids: set[int] = set()
+
+
+async def _notify_admins(bot, text: str):
+    """Kirim notifikasi ke semua admin (TELEGRAM_ADMIN_IDS) via DM. Kalau
+    seorang admin belum pernah /start bot ini secara pribadi, Telegram
+    akan reject pengiriman — di-skip diam-diam per admin (tidak boleh
+    bikin admin lain gagal kebagian notifikasi juga)."""
+    for admin_id in config.TELEGRAM_ADMIN_IDS:
+        try:
+            await bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Gagal kirim notifikasi ke admin %s: %s", admin_id, e)
+
 
 def _crossed(prev: float | None, curr: float, level: float) -> bool:
     if prev is None:
@@ -43,7 +63,7 @@ async def check_positions(bot, channel_id):
         return
 
     try:
-        all_prices = await mexc_client.get_all_prices()
+        all_prices, futures_only_symbols = await mexc_client.get_combined_prices()
     except Exception as e:
         logger.warning("Gagal ambil harga MEXC: %s", e)
         return
@@ -54,7 +74,32 @@ async def check_positions(bot, channel_id):
         symbol = sig["symbol"]
         curr = all_prices.get(symbol)
         if curr is None:
+            if sig["id"] not in _notified_signal_ids:
+                _notified_signal_ids.add(sig["id"])
+                logger.warning(
+                    "Symbol %s (%s) tidak ditemukan di Spot maupun Futures MEXC — "
+                    "posisi ini tidak akan pernah kedeteksi entry/TP/SL-nya.",
+                    symbol, sig.get("pair"),
+                )
+                await _notify_admins(
+                    bot,
+                    f"⚠️ <b>Symbol tidak ditemukan di MEXC</b>\n"
+                    f"Pair: <b>{sig.get('pair', symbol)}</b> (symbol: <code>{symbol}</code>)\n\n"
+                    f"Sudah dicoba di Spot & Futures MEXC, tapi symbol ini tidak ada "
+                    f"di keduanya. Kemungkinan salah ketik ticker di signal, atau "
+                    f"pair-nya memang belum/tidak listing di MEXC. Posisi ini tidak "
+                    f"akan terpantau otomatis sampai masalahnya diperbaiki (cek "
+                    f"ulang ticker-nya, atau /cancel kalau memang salah).",
+                )
             continue
+        if symbol in futures_only_symbols and sig["id"] not in _notified_signal_ids:
+            # Tandai juga di set yang sama supaya notifikasi "pakai harga
+            # Futures" ini cuma dikirim SEKALI per signal, bukan tiap poll.
+            _notified_signal_ids.add(sig["id"])
+            logger.info(
+                "Symbol %s (%s) tidak ada di Spot, dipantau pakai harga Futures MEXC.",
+                symbol, sig.get("pair"),
+            )
 
         prev = sig.get("last_price")
 
