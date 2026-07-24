@@ -119,11 +119,13 @@ async def check_positions(bot, channel_id):
             result = "MIXED" if already_hit else "LOSS"
             realized_rr = rr_calc.compute_realized_rr(result, fresh_targets)
             database.close_signal(sig["id"], result=result, price=curr, realized_rr=realized_rr)
-            note = (
-                f"Sebagian TP sudah tercapai sebelumnya ({len(already_hit)}/{len(all_targets)} level)"
-                if result == "MIXED"
-                else "Belum ada TP tercapai"
-            )
+            slbe = rr_calc._slbe_active(fresh_targets)
+            if result == "MIXED":
+                note = f"Sebagian TP sudah tercapai sebelumnya ({len(already_hit)}/{len(all_targets)} level)"
+                if slbe:
+                    note += " — sisa posisi closed di Entry (SLBE), bukan rugi penuh"
+            else:
+                note = "Belum ada TP tercapai"
             await bot.send_message(
                 chat_id=channel_id,
                 text=formatting.closed_sl(sig, note, result),

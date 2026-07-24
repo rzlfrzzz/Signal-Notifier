@@ -1,7 +1,8 @@
 """Generate & kirim rekap harian / bulanan ke channel.
 
-Asumsi position sizing: modal dibagi rata ke tiap level TP (mis. kalau ada
-3 level TP, tiap level mewakili 1/3 posisi). Realized RR per signal:
+Asumsi position sizing (lihat rr_calc.py untuk detail lengkap): TP1 = 50%
+posisi, TP2 = 25% posisi (begitu TP2 HIT, SL sisa posisi dianggap dipindah
+ke Entry / SLBE), TP3 dst = sisa posisi terakhir. Realized RR per signal:
 
 - result == WIN   -> semua level TP tercapai -> RR = rata-rata RR semua level
 - result == LOSS  -> SL kena, belum ada TP tercapai -> RR = -1 (rugi 1R penuh)

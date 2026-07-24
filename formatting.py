@@ -108,11 +108,18 @@ def entry_hit(sig: dict, curr: float) -> str:
 
 
 def tp_hit(sig: dict, target: dict, curr: float) -> str:
+    slbe_note = ""
+    if target["level"] == 2:
+        slbe_note = (
+            f"\n\n🔒 <i>SL sisa posisi dipindah ke Entry "
+            f"(<code>{fmt_num(sig['entry'])}</code>) — SLBE aktif.</i>"
+        )
     return (
         f"✅ <b>TP{target['level']} TERCAPAI</b>\n"
         f"{DIVIDER}\n"
         f"{pair_title(sig['pair'], sig['direction'])}\n\n"
         f"RR 1:{fmt_num(target['rr'])} tercapai @ <code>{fmt_num(curr)}</code>"
+        f"{slbe_note}"
     )
 
 
