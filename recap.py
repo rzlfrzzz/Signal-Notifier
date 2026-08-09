@@ -101,10 +101,13 @@ def _realized_pct(signal: dict, targets: list[dict]) -> float:
 
 
 def _manual_is_win(signal: dict, targets: list[dict]) -> bool:
-    """Signal MANUAL (ditutup via /close) dianggap WIN kalau realized_pct-nya
-    >= 0 (profit/breakeven), dan LOSS kalau minus. Dipakai supaya Win Rate
-    tetap mencerminkan hasil sebenarnya dari close manual, bukan otomatis
-    dianggap bukan-win."""
+    """Dianggap WIN kalau realized_pct-nya >= 0 (profit/breakeven), dan LOSS
+    kalau minus. Dipakai untuk mereklasifikasi signal yang outcome
+    label-nya bukan WIN/LOSS murni (MANUAL = ditutup via /close, MIXED =
+    SL kena setelah sebagian TP tercapai) supaya Win Rate tetap
+    mencerminkan hasil sebenarnya, bukan otomatis dianggap bukan-win hanya
+    karena label-nya bukan 'WIN'. Nama fungsi dipertahankan (historis),
+    tapi generic untuk kedua kasus (MANUAL & MIXED)."""
     return _realized_pct(signal, targets) >= 0
 
 
@@ -123,9 +126,9 @@ def _analyst_label(signal: dict) -> str:
 
 def _analyst_breakdown_block(signals_with_targets: list[tuple[dict, list[dict]]]) -> str:
     """Block 'Win Rate per Analis': breakdown W/L dan Net R per analis
-    dari daftar signal closed pada periode rekap ini. Signal MANUAL
-    direklasifikasi jadi win/loss lewat _manual_is_win, konsisten dengan
-    _stats_block. Diurutkan dari win rate tertinggi ke terendah."""
+    dari daftar signal closed pada periode rekap ini. Signal MANUAL dan
+    MIXED direklasifikasi jadi win/loss lewat _manual_is_win, konsisten
+    dengan _stats_block. Diurutkan dari win rate tertinggi ke terendah."""
     if not signals_with_targets:
         return ""
 
@@ -138,7 +141,8 @@ def _analyst_breakdown_block(signals_with_targets: list[tuple[dict, list[dict]]]
         total = len(items)
         wins = sum(
             1 for s, t in items
-            if s["result"] == "WIN" or (s["result"] == "MANUAL" and _manual_is_win(s, t))
+            if s["result"] == "WIN"
+            or (s["result"] in ("MANUAL", "MIXED") and _manual_is_win(s, t))
         )
         losses = total - wins
         win_rate = (wins / total) * 100 if total else 0.0
@@ -162,8 +166,13 @@ def _recap_detail_line(s: dict, t: list[dict]) -> str:
     """Satu baris detail untuk satu signal yang closed."""
     if s["result"] == "MANUAL":
         icon = "🔧✅" if _manual_is_win(s, t) else "🔧🛑"
+    elif s["result"] == "MIXED":
+        # Tetap kategori Mixed (🟡) secara visual, tapi ditambah ✅/🛑
+        # supaya kelihatan direklasifikasi win/loss sebenarnya berdasarkan
+        # realized_pct — bukan otomatis dianggap bukan-win.
+        icon = "🟡✅" if _manual_is_win(s, t) else "🟡🛑"
     else:
-        icon = {"WIN": "✅", "LOSS": "🛑", "MIXED": "🟡"}.get(s["result"], "•")
+        icon = {"WIN": "✅", "LOSS": "🛑"}.get(s["result"], "•")
     rr = _realized_rr(s, t)
     pct = _realized_pct(s, t)
     hit_levels = [tt["level"] for tt in t if tt["status"] == "HIT"]
@@ -277,7 +286,12 @@ def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]
     jumlah outcome, (6) persentase (cuma info tambahan). Manual Closed
     ditampilkan terpisah sebagai metadata metode-exit, BUKAN sebagai
     kategori outcome (karena hasil aktualnya sudah tercermin di Win/Loss
-    lewat reklasifikasi win/loss manual)."""
+    lewat reklasifikasi win/loss manual). MIXED tetap ditampilkan sebagai
+    kategori outcome tersendiri (label 'Mixed' tidak hilang / tidak
+    dipindah ke Win atau Loss), tapi ikut direklasifikasi ke pembilang
+    Win Rate berdasarkan realized_pct-nya (>= 0 -> win, < 0 -> loss),
+    sama seperti MANUAL - supaya Win Rate tidak pincang 0% cuma karena
+    semua closed signal kebetulan MIXED/MANUAL."""
     total = len(signals_with_targets)
     if total == 0:
         return f"{title}\n{DIVIDER}\n\n<i>Belum ada signal yang closed pada periode ini.</i>"
@@ -289,11 +303,13 @@ def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]
 
     manual_wins = [s for s, t in manual_wt if _manual_is_win(s, t)]
     manual_losses = [s for s, t in manual_wt if not _manual_is_win(s, t)]
+    mixed_wins = [s for s, t in mixed_wt if _manual_is_win(s, t)]
+    mixed_losses = [s for s, t in mixed_wt if not _manual_is_win(s, t)]
 
-    # Win Rate secara eksplisit disebut "termasuk manual win" supaya
-    # transparan bahwa manual close yang net profit ikut dihitung di
-    # pembilang - bukan cuma outcome WIN otomatis.
-    win_rate = ((len(wins) + len(manual_wins)) / total) * 100
+    # Win Rate secara eksplisit disebut "termasuk manual & mixed win" supaya
+    # transparan bahwa manual close & mixed close yang net profit ikut
+    # dihitung di pembilang - bukan cuma outcome WIN otomatis.
+    win_rate = ((len(wins) + len(manual_wins) + len(mixed_wins)) / total) * 100
     total_pct = sum(_realized_pct(s, t) for s, t in signals_with_targets)
 
     perf = _performance_metrics(signals_with_targets)
@@ -311,7 +327,7 @@ def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]
     # 3) Win Rate
     stats_lines.append(
         f"Win Rate        {_bar(win_rate)}  <b>{win_rate:.1f}%</b>  "
-        f"<i>(termasuk manual win)</i>"
+        f"<i>(termasuk manual & mixed win)</i>"
     )
     stats_lines.append("")
     # 4) Karakteristik strategi: Avg Win/Loss & Avg Reward-Risk
@@ -323,7 +339,11 @@ def _stats_block(title: str, signals_with_targets: list[tuple[dict, list[dict]]]
     stats_lines.append(f"Total Signal    <b>{total}</b>")
     stats_lines.append("<b>Outcome</b>")
     stats_lines.append(f"✅ Win      : <b>{len(wins)}</b>")
-    mixed_suffix = f"  <i>({mixed_breakdown_str})</i>" if mixed_breakdown_str else ""
+    mixed_wl = f"{len(mixed_wins)}W / {len(mixed_losses)}L"
+    mixed_suffix = (
+        f"  <i>({mixed_wl} · {mixed_breakdown_str})</i>" if mixed_breakdown_str
+        else f"  <i>({mixed_wl})</i>" if mixed_wt else ""
+    )
     stats_lines.append(f"🟡 Mixed    : <b>{len(mixed_wt)}</b>{mixed_suffix}")
     stats_lines.append(f"🛑 Loss     : <b>{len(losses)}</b>")
     stats_lines.append("")
