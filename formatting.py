@@ -13,7 +13,7 @@ escape `< > &` yang jarang muncul di teks signal.
 """
 import html
 
-DIVIDER = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
+DIVIDER = "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
 
 def esc(value) -> str:
@@ -109,9 +109,9 @@ def entry_hit(sig: dict, curr: float) -> str:
 
 def tp_hit(sig: dict, target: dict, curr: float) -> str:
     slbe_note = ""
-    if target["level"] == 2:
+    if target["level"] == 1:
         slbe_note = (
-            f"\n\n🔒 <i>SL sisa posisi dipindah ke Entry "
+            f"\n\n🔒 <i>Tutup 50% posisi, pindahkan SL ke Entry"
             f"(<code>{fmt_num(sig['entry'])}</code>) — SLBE aktif.</i>"
         )
     return (
