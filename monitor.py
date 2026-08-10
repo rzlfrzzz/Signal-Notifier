@@ -1,10 +1,15 @@
 """Loop periodik yang cek harga MEXC dan update status signal:
 
 PENDING -> ACTIVE       (harga menyentuh level entry)
-PENDING -> INVALIDATED  (harga sudah menyentuh TP terjauh duluan, padahal
-                          entry belum pernah kesentuh sama sekali -> entry
-                          dianggap sudah "ketinggalan", signal dibatalkan
-                          otomatis + notifikasi ke channel)
+PENDING -> INVALIDATED  (dua kemungkinan, entry belum pernah kesentuh
+                          sama sekali):
+                          a) harga sudah menyentuh TP terjauh duluan ->
+                             entry dianggap sudah "ketinggalan"
+                          b) harga sudah menyentuh Stoploss duluan ->
+                             setup dianggap sudah gugur sebelum posisi
+                             sungguhan terbuka
+                          Keduanya -> signal dibatalkan otomatis +
+                          notifikasi ke channel.
 ACTIVE  -> tiap level TP (TP1, TP2, TP3, ...) dicek satu-satu; begitu
            tersentuh, level itu ditandai HIT dan bot kirim notifikasi partial.
 ACTIVE  -> CLOSED   terjadi kalau salah satu dari ini kejadian duluan:
@@ -113,11 +118,24 @@ async def check_positions(bot, channel_id):
                 )
                 continue
 
+            # SL kesentuh duluan sebelum entry -> setup dianggap sudah gugur,
+            # jangan ditunggu sampai entry kesentuh nanti (lihat diskusi:
+            # kalau dibiarkan lanjut ke ACTIVE, itu sama saja membuka posisi
+            # yang dari awal sudah tahu arahnya salah).
+            if _crossed(prev, curr, sig["stoploss"]):
+                database.invalidate_signal(sig["id"], curr, reason="SL_BEFORE_ENTRY")
+                await bot.send_message(
+                    chat_id=channel_id,
+                    text=formatting.invalidated_sl_before_entry(sig, curr),
+                    parse_mode="HTML",
+                )
+                continue
+
             sig_targets = sorted(targets_by_signal.get(sig["id"], []), key=lambda t: t["level"])
             last_target = sig_targets[-1] if sig_targets else None
 
             if last_target is not None and _crossed(prev, curr, last_target["price"]):
-                database.invalidate_signal(sig["id"], curr)
+                database.invalidate_signal(sig["id"], curr, reason="TP_SKIPPED")
                 await bot.send_message(
                     chat_id=channel_id,
                     text=formatting.invalidated(sig, last_target, curr),

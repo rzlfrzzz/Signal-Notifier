@@ -141,13 +141,25 @@ def cancel_signal(signal_id: int):
     }).eq("id", signal_id).execute()
 
 
-def invalidate_signal(signal_id: int, price: float):
-    """Batalkan signal PENDING secara otomatis karena harga sudah menyentuh
-    target terjauh (TP terakhir) duluan sebelum entry sempat kesentuh —
-    artinya entry sudah 'ketinggalan', signal dianggap tidak valid lagi."""
+def invalidate_signal(signal_id: int, price: float, reason: str = "TP_SKIPPED"):
+    """Batalkan signal PENDING secara otomatis karena entry belum sempat
+    kesentuh, tapi harga sudah bergerak ke titik yang bikin setup-nya tidak
+    relevan lagi. Dua kemungkinan reason:
+    - 'TP_SKIPPED'        -> harga sudah menyentuh target terjauh (TP
+                             terakhir) duluan, entry dianggap 'ketinggalan'.
+    - 'SL_BEFORE_ENTRY'    -> harga sudah menyentuh stoploss duluan sebelum
+                             sempat entry, thesis-nya dianggap sudah gugur
+                             sebelum posisi sungguhan terbuka.
+    reason disimpan di kolom `result` (kolom ini bebas dipakai untuk signal
+    non-CLOSED, tidak ada check constraint) supaya kelihatan di data kalau
+    perlu ditelusuri, tapi TIDAK memengaruhi recap/statistik karena recap
+    cuma menghitung signal dengan status == 'CLOSED' (lihat
+    get_closed_signals_between) — status INVALIDATED tidak pernah masuk
+    situ."""
     client = get_client()
     client.table("signals").update({
         "status": "INVALIDATED",
+        "result": reason,
         "last_price": price,
         "closed_at": _now_iso(),
     }).eq("id", signal_id).execute()

@@ -167,6 +167,19 @@ def invalidated(sig: dict, last_target: dict, curr: float) -> str:
     )
 
 
+def invalidated_sl_before_entry(sig: dict, curr: float) -> str:
+    return (
+        f"❌ <b>SIGNAL TIDAK VALID</b>\n"
+        f"{DIVIDER}\n"
+        f"{pair_title(sig['pair'], sig['direction'])}\n\n"
+        f"Entry <code>{fmt_num(sig['entry'])}</code> belum sempat kesentuh, "
+        f"tapi harga sudah tembus Stoploss "
+        f"(<code>{fmt_num(sig['stoploss'])}</code>) di <code>{fmt_num(curr)}</code>.\n\n"
+        f"<i>Signal dibatalkan otomatis — SL kesentuh duluan sebelum entry, "
+        f"setup dianggap sudah tidak valid.</i>"
+    )
+
+
 def cancel_channel_notice(pending: list[dict]) -> str:
     names = "\n".join(
         f"• {pair_title(s['pair'], s['direction'])} — entry <code>{fmt_num(s['entry'])}</code>"
