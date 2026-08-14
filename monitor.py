@@ -78,6 +78,34 @@ async def check_positions(bot, channel_id):
     for sig in open_signals:
         symbol = sig["symbol"]
         curr = all_prices.get(symbol)
+
+        if curr is None:
+            # Kategori STOCK (tokenized stock/stock futures MEXC) pakai
+            # suffix 'STOCK' di base asset (mis. 'MUUSDT' -> 'MUSTOCKUSDT')
+            # yang tidak tercantum di ticker mentah dari teks signal — coba
+            # cek symbol dengan suffix itu dulu di data bulk yang sudah
+            # kepanggil (hemat network call kalau kebetulan sudah ada).
+            stock_variant = mexc_client.stock_symbol_variant(symbol)
+            if stock_variant is not None:
+                curr = all_prices.get(stock_variant)
+
+        if curr is None:
+            # Fallback terakhir: query per-symbol langsung (mexc_client.
+            # get_price sudah otomatis coba varian Stock juga di dalamnya).
+            # Ini juga menutup kasus symbol yang memang tidak ikut
+            # ke-include di snapshot bulk sama sekali (baru listing, atau
+            # di-hide dari listing publik massal) walau sebenarnya ada
+            # kalau diquery satu-satu.
+            curr = await mexc_client.get_price(symbol)
+            if curr is not None:
+                logger.info(
+                    "Symbol %s (%s) tidak muncul di snapshot bulk MEXC, tapi "
+                    "berhasil ditemukan lewat query per-symbol (kemungkinan "
+                    "varian symbol Stock, atau pair yang di-hide dari "
+                    "listing massal). Dipakai harga ini.",
+                    symbol, sig.get("pair"),
+                )
+
         if curr is None:
             if sig["id"] not in _notified_signal_ids:
                 _notified_signal_ids.add(sig["id"])
@@ -90,14 +118,24 @@ async def check_positions(bot, channel_id):
                     bot,
                     f"⚠️ <b>Symbol tidak ditemukan di MEXC</b>\n"
                     f"Pair: <b>{sig.get('pair', symbol)}</b> (symbol: <code>{symbol}</code>)\n\n"
-                    f"Sudah dicoba di Spot & Futures MEXC, tapi symbol ini tidak ada "
-                    f"di keduanya. Kemungkinan salah ketik ticker di signal, atau "
-                    f"pair-nya memang belum/tidak listing di MEXC. Posisi ini tidak "
-                    f"akan terpantau otomatis sampai masalahnya diperbaiki (cek "
-                    f"ulang ticker-nya, atau /cancel kalau memang salah).",
+                    f"Sudah dicoba di Spot & Futures MEXC (snapshot bulk, query "
+                    f"per-symbol, maupun varian Stock <code>{mexc_client.stock_symbol_variant(symbol) or '-'}</code>), "
+                    f"tapi symbol ini tetap tidak ketemu. Kemungkinan salah ketik "
+                    f"ticker di signal, atau pair-nya memang belum/tidak listing "
+                    f"di MEXC. Posisi ini tidak akan terpantau otomatis sampai "
+                    f"masalahnya diperbaiki (cek ulang ticker-nya, atau /cancel "
+                    f"kalau memang salah).",
                 )
             continue
-        if symbol in futures_only_symbols and sig["id"] not in _notified_signal_ids:
+
+        # Symbol lookup key yang benar-benar cocok di futures_only_symbols
+        # bisa jadi symbol asli ATAU varian Stock-nya (lihat blok di atas) —
+        # dipakai buat cek "cuma ada di Futures" di bawah supaya info log-nya
+        # akurat, bukan cuma cek symbol asli mentah-mentah.
+        matched_symbol = symbol if symbol in all_prices else (
+            mexc_client.stock_symbol_variant(symbol) or symbol
+        )
+        if matched_symbol in futures_only_symbols and sig["id"] not in _notified_signal_ids:
             # Tandai juga di set yang sama supaya notifikasi "pakai harga
             # Futures" ini cuma dikirim SEKALI per signal, bukan tiap poll.
             _notified_signal_ids.add(sig["id"])

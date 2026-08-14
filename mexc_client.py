@@ -14,6 +14,7 @@ Untuk itu, `get_combined_prices()` di bawah ini gabungkan harga Spot +
 Futures (fallback), supaya pair yang cuma ada di Futures tetap kepantau.
 """
 import logging
+from typing import Optional
 
 import httpx
 
@@ -57,6 +58,30 @@ def _spot_symbol_to_futures_style(symbol: str) -> str:
         base = symbol[: -len(quote)]
         return f"{base}_{quote}"
     return symbol
+
+
+_STOCK_SUFFIX = "STOCK"
+
+
+def stock_symbol_variant(symbol: str) -> Optional[str]:
+    """Konversi symbol biasa ('MUUSDT', 'SAMSUNGUSDT') ke varian symbol
+    kategori Stock di MEXC ('MUSTOCKUSDT', 'SAMSUNGSTOCKUSDT') dengan
+    menyisipkan 'STOCK' di base asset, sebelum quote asset.
+
+    Ini karena base asset kategori tokenized stock/stock futures di MEXC
+    memang pakai suffix 'STOCK' (mis. ticker asli MU jadi MUSTOCK di
+    MEXC), beda dari ticker mentah yang tercantum di teks signal (cuma
+    'MU') yang dipakai signal_parser buat build symbol awal ('MUUSDT').
+    Return None kalau symbol sudah dalam bentuk stock variant atau
+    formatnya tidak dikenali (tidak diakhiri quote asset), supaya caller
+    tidak perlu query dua kali ke symbol yang sama."""
+    quote = config.DEFAULT_QUOTE
+    if not (quote and symbol.endswith(quote) and len(symbol) > len(quote)):
+        return None
+    base = symbol[: -len(quote)]
+    if base.endswith(_STOCK_SUFFIX):
+        return None
+    return f"{base}{_STOCK_SUFFIX}{quote}"
 
 
 async def get_all_futures_prices() -> dict[str, float]:
@@ -111,10 +136,7 @@ async def get_combined_prices() -> tuple[dict[str, float], set[str]]:
     return combined, futures_only_symbols
 
 
-async def get_price(symbol: str) -> float | None:
-    """Ambil harga satu symbol saja (dipakai command /close & debugging
-    cepat). Coba Spot dulu, fallback ke Futures kalau symbol itu ternyata
-    bukan pair Spot (mis. SAMSUNGUSDT)."""
+async def _try_spot_price(symbol: str) -> Optional[float]:
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(config.MEXC_TICKER_ALL_URL, params={"symbol": symbol})
         resp.raise_for_status()
@@ -122,8 +144,10 @@ async def get_price(symbol: str) -> float | None:
     try:
         return float(data["price"])
     except (KeyError, ValueError, TypeError):
-        pass
+        return None
 
+
+async def _try_futures_price(symbol: str) -> Optional[float]:
     futures_symbol = _spot_symbol_to_futures_style(symbol)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -136,3 +160,29 @@ async def get_price(symbol: str) -> float | None:
     except Exception as e:
         logger.warning("Gagal ambil harga Futures MEXC untuk %s: %s", symbol, e)
         return None
+
+
+async def get_price(symbol: str) -> Optional[float]:
+    """Ambil harga satu symbol saja (dipakai command /close & debugging
+    cepat). Urutan coba: Spot -> Futures -> Spot varian Stock -> Futures
+    varian Stock. Varian Stock (mis. 'MUUSDT' -> 'MUSTOCKUSDT') perlu
+    dicoba juga karena base asset kategori tokenized stock/stock futures
+    di MEXC pakai suffix 'STOCK' yang tidak tercantum di ticker mentah
+    dari teks signal (lihat docstring stock_symbol_variant)."""
+    price = await _try_spot_price(symbol)
+    if price is not None:
+        return price
+
+    price = await _try_futures_price(symbol)
+    if price is not None:
+        return price
+
+    variant = stock_symbol_variant(symbol)
+    if variant is None:
+        return None
+
+    price = await _try_spot_price(variant)
+    if price is not None:
+        return price
+
+    return await _try_futures_price(variant)
