@@ -34,8 +34,14 @@ _RR_RE = re.compile(r"RR\s*:?\s*1\s*:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
 # Kalau tidak ada label ini di teks, main.py akan fallback ke
 # author_signature Telegram (kalau "Sign messages" aktif di channel), lalu
 # fallback terakhir ke "Unknown".
+#
+# Catatan penting: \b di depan + ":" wajib (bukan opsional) supaya regex ini
+# tidak nyangkut ke kata lain yang kebetulan diawali "Analis", misalnya
+# "Analisa Teknikal" (header section teknikal, BUKAN label nama analis).
+# Tanpa \b, "Analis" akan match substring pertama dari "Analisa" dan sisa
+# katanya ("a Teknikal") ke-capture jadi nama analis yang salah.
 _ANALYST_RE = re.compile(
-    r"(?:Analyst|Analis|Signal\s*by|Dari)\s*:?\s*@?([A-Za-z0-9_.\- ]{2,40})",
+    r"\b(?:(?:Analyst|Analis|Dari)\s*:\s*|Signal\s*by\s+)@?([A-Za-z0-9_.\- ]{2,40})",
     re.IGNORECASE,
 )
 
