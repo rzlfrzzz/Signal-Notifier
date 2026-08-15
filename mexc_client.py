@@ -109,8 +109,10 @@ async def get_all_futures_prices() -> dict[str, float]:
 
 
 async def get_combined_prices() -> tuple[dict[str, float], set[str]]:
-    """Gabungan harga Spot + Futures (fallback). Spot diprioritaskan kalau
-    satu symbol kebetulan ada di keduanya.
+    """Gabungan harga Spot + Futures (fallback). Sumber yang DIUTAMAKAN
+    kalau satu symbol kebetulan ada di keduanya diatur lewat
+    config.PRICE_SOURCE_PRIORITY ("futures" secara default — lihat catatan
+    di config.py kenapa; ganti ke "spot" via .env kalau perlu).
 
     Return: (prices, futures_only_symbols)
     - prices             : dict harga gabungan, siap dipakai monitor.py
@@ -132,7 +134,15 @@ async def get_combined_prices() -> tuple[dict[str, float], set[str]]:
         futures_prices = {}
 
     futures_only_symbols = set(futures_prices) - set(spot_prices)
-    combined = {**futures_prices, **spot_prices}
+
+    if config.PRICE_SOURCE_PRIORITY == "spot":
+        # Spot menang kalau symbol ada di keduanya.
+        combined = {**futures_prices, **spot_prices}
+    else:
+        # Default: Futures menang kalau symbol ada di keduanya (lihat
+        # docstring/config.py — level signal ditarik dari chart Futures).
+        combined = {**spot_prices, **futures_prices}
+
     return combined, futures_only_symbols
 
 
@@ -163,17 +173,24 @@ async def _try_futures_price(symbol: str) -> Optional[float]:
 
 
 async def get_price(symbol: str) -> Optional[float]:
-    """Ambil harga satu symbol saja (dipakai command /close & debugging
-    cepat). Urutan coba: Spot -> Futures -> Spot varian Stock -> Futures
-    varian Stock. Varian Stock (mis. 'MUUSDT' -> 'MUSTOCKUSDT') perlu
+    """Ambil harga satu symbol saja (dipakai command /close, fetch harga
+    awal saat signal baru dibuat, & debugging cepat). Urutan coba
+    Spot-dulu-atau-Futures-dulu ikut config.PRICE_SOURCE_PRIORITY (lihat
+    get_combined_prices), lalu fallback ke varian Stock kalau dua-duanya
+    tidak ketemu. Varian Stock (mis. 'MUUSDT' -> 'MUSTOCKUSDT') perlu
     dicoba juga karena base asset kategori tokenized stock/stock futures
     di MEXC pakai suffix 'STOCK' yang tidak tercantum di ticker mentah
     dari teks signal (lihat docstring stock_symbol_variant)."""
-    price = await _try_spot_price(symbol)
+    if config.PRICE_SOURCE_PRIORITY == "spot":
+        primary, secondary = _try_spot_price, _try_futures_price
+    else:
+        primary, secondary = _try_futures_price, _try_spot_price
+
+    price = await primary(symbol)
     if price is not None:
         return price
 
-    price = await _try_futures_price(symbol)
+    price = await secondary(symbol)
     if price is not None:
         return price
 
@@ -181,8 +198,8 @@ async def get_price(symbol: str) -> Optional[float]:
     if variant is None:
         return None
 
-    price = await _try_spot_price(variant)
+    price = await primary(variant)
     if price is not None:
         return price
 
-    return await _try_futures_price(variant)
+    return await secondary(variant)
