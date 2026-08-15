@@ -151,6 +151,24 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 3. "Unknown" -> fallback terakhir kalau dua-duanya tidak ada.
     analyst = parsed.analyst or msg.author_signature or "Unknown"
 
+    # Ambil harga SEKARANG (saat signal baru diposting) buat jadi baseline
+    # last_price. Kalau ini tidak diisi (dibiarkan NULL), poll monitor.py
+    # yang PERTAMA tidak akan bisa mendeteksi crossing sama sekali (lihat
+    # catatan panjang di database.insert_signal) — kalau kebetulan harga
+    # saat itu sudah pas/lewat level entry dan tidak pernah balik lagi ke
+    # situ, signal akan nyangkut PENDING selamanya walau sebenarnya sudah
+    # entry. Kalau fetch gagal (network dsb), tetap lanjut simpan sebagai
+    # NULL (fail-soft) — monitor.py akan isi di poll berikutnya seperti
+    # perilaku lama.
+    try:
+        initial_price = await mexc_client.get_price(parsed.symbol)
+    except Exception as e:
+        logger.warning(
+            "Gagal ambil harga awal untuk %s (%s) saat signal baru dibuat: %s",
+            parsed.symbol, parsed.pair, e,
+        )
+        initial_price = None
+
     row = database.insert_signal(
         message_id=msg.message_id,
         chat_id=msg.chat_id,
@@ -161,19 +179,35 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         stoploss=parsed.stoploss,
         raw_message=text,
         analyst=analyst,
+        last_price=initial_price,
     )
     database.insert_targets(row["id"], parsed.targets)
     logger.info(
-        "Signal baru tersimpan: %s (targets: %s, analyst=%s)",
+        "Signal baru tersimpan: %s (targets: %s, analyst=%s, harga awal=%s)",
         row,
         [(t.level, t.rr, t.price) for t in parsed.targets],
         analyst,
+        initial_price,
     )
 
     await msg.reply_text(
         formatting.new_signal(parsed, analyst),
         parse_mode="HTML",
     )
+
+    # Kalau harga awal itu KEBETULAN SUDAH pas di level entry (mis. entry
+    # ditaruh persis di harga sekarang), langsung tandai ACTIVE sekarang
+    # juga alih-alih menunggu monitor.py mendeteksi "crossing" nanti —
+    # crossing check butuh harga bergerak MELEWATI level, jadi kalau harga
+    # sudah persis di level itu dan lalu bergerak menjauh tanpa pernah
+    # balik lagi, itu tidak akan pernah ke-detect sebagai crossing.
+    if initial_price is not None and initial_price == parsed.entry:
+        database.mark_active(row["id"], initial_price)
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            text=formatting.entry_hit(row, initial_price),
+            parse_mode="HTML",
+        )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
