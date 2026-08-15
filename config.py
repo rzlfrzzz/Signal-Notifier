@@ -44,3 +44,16 @@ MEXC_TICKER_ALL_URL = "https://api.mexc.com/api/v3/ticker/price"
 # baru yang awalnya cuma dibuka Futures dulu, atau produk derivatif
 # seperti SAMSUNGUSDT yang memang tidak ada versi Spot-nya).
 MEXC_FUTURES_TICKER_ALL_URL = "https://contract.mexc.com/api/v1/contract/ticker"
+
+# Sumber harga mana yang DIUTAMAKAN kalau satu symbol kebetulan listing di
+# Spot MAUPUN Futures MEXC sekaligus (mayoritas pair besar begitu).
+# PENTING: chart yang dipakai analyst untuk menentukan level entry/SL/TP
+# di channel ini adalah chart "PERPETUAL FUTURES" MEXC (lihat watermark di
+# screenshot TradingView), BUKAN chart Spot. Harga Spot & Futures bisa
+# beda tipis (basis/funding) — kalau bot pantau harga Spot padahal level
+# ditarik dari wick Futures, entry/SL/TP bisa "kelewat" tanpa pernah
+# terdeteksi tersentuh oleh bot walaupun sudah tersentuh di chart Futures
+# aslinya. Makanya default di sini "futures", bukan "spot" seperti semula.
+# Ganti ke "spot" di .env (PRICE_SOURCE_PRIORITY=spot) kalau ternyata ada
+# analyst lain yang pakai chart Spot.
+PRICE_SOURCE_PRIORITY = _get("PRICE_SOURCE_PRIORITY", "futures").strip().lower()
