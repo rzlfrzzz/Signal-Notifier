@@ -22,7 +22,8 @@ def _now_iso() -> str:
 
 def insert_signal(*, message_id: int, chat_id: int, pair: str, symbol: str,
                    direction: str, entry: float, stoploss: float,
-                   raw_message: str, analyst: str = "Unknown") -> dict:
+                   raw_message: str, analyst: str = "Unknown",
+                   last_price: Optional[float] = None) -> dict:
     client = get_client()
     row = {
         "message_id": message_id,
@@ -35,6 +36,17 @@ def insert_signal(*, message_id: int, chat_id: int, pair: str, symbol: str,
         "status": "PENDING",
         "raw_message": raw_message,
         "analyst": analyst,
+        # PENTING: isi last_price dari harga saat signal dibuat (bukan
+        # dibiarkan NULL). monitor.py mendeteksi entry/SL/TP "tersentuh"
+        # pakai crossing check antara last_price (poll sebelumnya) dan
+        # harga sekarang — kalau last_price NULL di poll pertama,
+        # _crossed() SELALU return False (lihat monitor.py), jadi kalau
+        # harga saat itu kebetulan sudah pas/lewat entry, sentuhannya
+        # tidak pernah tercatat. Kalau setelahnya harga tidak pernah
+        # balik lagi ke level entry, signal itu nyangkut PENDING selamanya
+        # walau entry sebenarnya sudah tersentuh. Ngisi last_price di sini
+        # menutup celah itu.
+        "last_price": last_price,
     }
     res = client.table("signals").insert(row).execute()
     return res.data[0]
