@@ -1,5 +1,29 @@
 # MEXC Signal Monitor Bot
 
+## Fix (Agustus 2026): signal "nyangkut" PENDING walau entry sudah kesentuh
+
+Root cause: kolom `last_price` dibiarkan `NULL` saat signal baru dibuat.
+Deteksi "entry tersentuh" di `monitor.py` pakai *crossing check* antara
+harga poll sebelumnya (`last_price`) dan harga sekarang — kalau
+`last_price` masih `NULL` di poll pertama, crossing SELALU gagal
+terdeteksi. Jadi kalau harga kebetulan sudah pas/lewat entry persis saat
+signal baru diposting, lalu harga tidak pernah balik lagi ke level itu
+(mis. langsung reversal naik terus), status signal nyangkut `PENDING`
+selamanya walau entry sebenarnya sudah tersentuh.
+
+Perbaikan:
+- `main.py` sekarang fetch harga MEXC saat signal baru dibuat dan
+  menyimpannya sebagai `last_price` awal (lihat `database.insert_signal`).
+- Kalau harga awal itu kebetulan persis di level entry, signal langsung
+  ditandai `ACTIVE` saat itu juga (tidak menunggu poll berikutnya).
+- Tambahan: `PRICE_SOURCE_PRIORITY` (lihat `.env.example`) — sebelumnya
+  bot selalu memprioritaskan harga **Spot** MEXC kalau satu pair ada di
+  Spot & Futures sekaligus, padahal level entry/SL/TP di channel ini
+  ditarik dari chart **Futures** (perpetual) TradingView. Sekarang
+  default-nya "futures" supaya harga yang dipantau konsisten dengan
+  chart yang dipakai analyst.
+
+
 Bot Telegram untuk memantau signal trading yang kamu post ke channel:
 - Deteksi otomatis **Entry Hit**, **Stoploss Hit**, **Take Profit Hit** (harga real-time dari MEXC)
 - **Rekap harian & bulanan** otomatis ke channel
