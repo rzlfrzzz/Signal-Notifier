@@ -195,19 +195,35 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="HTML",
     )
 
-    # Kalau harga awal itu KEBETULAN SUDAH pas di level entry (mis. entry
-    # ditaruh persis di harga sekarang), langsung tandai ACTIVE sekarang
-    # juga alih-alih menunggu monitor.py mendeteksi "crossing" nanti —
-    # crossing check butuh harga bergerak MELEWATI level, jadi kalau harga
-    # sudah persis di level itu dan lalu bergerak menjauh tanpa pernah
-    # balik lagi, itu tidak akan pernah ke-detect sebagai crossing.
-    if initial_price is not None and initial_price == parsed.entry:
-        database.mark_active(row["id"], initial_price)
-        await context.bot.send_message(
-            chat_id=msg.chat_id,
-            text=formatting.entry_hit(row, initial_price),
-            parse_mode="HTML",
+    # Kalau harga awal itu KEBETULAN SUDAH pas ATAU SUDAH LEWAT level entry
+    # (mis. entry ditaruh di bawah/di atas harga sekarang lalu harga sudah
+    # keburu bergerak melewatinya sebelum sinyal ini sempat diproses bot),
+    # langsung tandai ACTIVE sekarang juga alih-alih menunggu monitor.py
+    # mendeteksi "crossing" nanti. Crossing check di monitor.py butuh entry
+    # berada DI ANTARA last_price (baseline) dan harga poll berikutnya —
+    # padahal baseline yang dipakai di sini justru initial_price itu
+    # sendiri. Kalau initial_price sudah di sisi "sudah entry" dan harga
+    # tidak pernah balik lagi ke level entry, crossing itu TIDAK PERNAH
+    # kedeteksi sampai kapan pun (signal nyangkut PENDING selamanya, lalu
+    # bisa ke-invalidate keliru sebagai TP_SKIPPED begitu harga menyentuh
+    # TP terjauh). Makanya di sini dicek "sudah lewat entry sesuai arah
+    # trade", bukan cuma exact-equality:
+    #   - LONG  : entry biasanya di bawah/sama harga saat itu -> sudah
+    #             entry kalau initial_price sudah TURUN sampai <= entry.
+    #   - SHORT : entry biasanya di atas/sama harga saat itu -> sudah
+    #             entry kalau initial_price sudah NAIK sampai >= entry.
+    if initial_price is not None:
+        already_entered = (
+            initial_price <= parsed.entry if parsed.direction == "LONG"
+            else initial_price >= parsed.entry
         )
+        if already_entered:
+            database.mark_active(row["id"], initial_price)
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                text=formatting.entry_hit(row, initial_price),
+                parse_mode="HTML",
+            )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
