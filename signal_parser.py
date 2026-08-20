@@ -26,9 +26,17 @@ class ParsedSignal:
 _DIRECTION_RE = re.compile(r"\b(LONG|SHORT)\b", re.IGNORECASE)
 _PAIR_LABELED_RE = re.compile(r"Pair\s*:?\s*\$?([A-Za-z0-9]+)(?:\s*/\s*([A-Za-z]{2,6}))?", re.IGNORECASE)
 _PAIR_DOLLAR_RE = re.compile(r"\$([A-Za-z0-9]+)(?:\s*/\s*([A-Za-z]{2,6}))?")
-_ENTRY_RE = re.compile(r"Entry\s*:?\s*\$?\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
-_SL_RE = re.compile(r"(?:Stop\s*-?\s*Loss|Stoploss|SL)\s*:?\s*\$?\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
-_RR_RE = re.compile(r"RR\s*:?\s*1\s*:\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+# Pola angka dasar + eksponen ilmiah OPSIONAL (mis. "4.415e-06", "1.2E+3").
+# Banyak bot lain nulis harga koin receh (harga di bawah 0.0001) pakai
+# notasi ilmiah karena itu representasi default float di banyak bahasa
+# pemrograman/exchange API. Tanpa bagian eksponen ini, regex lama berhenti
+# matching persis sebelum huruf "e" -> "4.415e-06" ke-capture cuma
+# "4.415" (angka "e-06"-nya hilang begitu saja, hasilnya salah ~1000x
+# lipat lebih besar dari harga sebenarnya).
+_NUM = r"[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?"
+_ENTRY_RE = re.compile(rf"Entry\s*:?\s*\$?\s*({_NUM})", re.IGNORECASE)
+_SL_RE = re.compile(rf"(?:Stop\s*-?\s*Loss|Stoploss|SL)\s*:?\s*\$?\s*({_NUM})", re.IGNORECASE)
+_RR_RE = re.compile(rf"RR\s*:?\s*1\s*:\s*({_NUM})", re.IGNORECASE)
 # Nama analis/pengirim signal, kalau dicantumkan eksplisit di teks pesan,
 # mis. "Analyst: John", "Analis : Budi_FX", "Signal by @trader_jaya", "Dari: Rina".
 # Kalau tidak ada label ini di teks, main.py akan fallback ke
